@@ -1,0 +1,13 @@
+apiVersion: ops.goblinoperator.io/v1alpha1
+kind: Remediation
+metadata:
+  name: remediation-sample
+  namespace: default
+spec:
+  podRef:
+    apiVersion: v1
+    kind: Pod
+    name: sample-pod
+    namespace: default
+  trigger: OOMKilled
+  maxAttempts: 2

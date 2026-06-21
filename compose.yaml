@@ -1,0 +1,12 @@
+services:
+  operator:
+    build:
+      context: ./operator
+      dockerfile: Dockerfile
+    image: sguldemond/goblin-operator:latest
+
+  agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    image: sguldemond/goblin-scout:latest

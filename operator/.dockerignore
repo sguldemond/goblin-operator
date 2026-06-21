@@ -1,0 +1,6 @@
+bin/
+config/
+test/
+hack/testdata/
+*.md
+Makefile

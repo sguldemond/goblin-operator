@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oom-test
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oom-test
+  template:
+    metadata:
+      labels:
+        app: oom-test
+    spec:
+      containers:
+        - name: alloc
+          image: python:3-slim
+          command:
+            - python3
+            - -c
+            - "x = bytearray(50 * 1024 * 1024); import time; time.sleep(60)"
+          resources:
+            limits:
+              memory: 10Mi
