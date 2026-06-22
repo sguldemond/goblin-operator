@@ -1,0 +1,49 @@
+# Scenario: stalled-rollout
+#
+# What's broken:
+#   The Deployment has a readiness probe pointing to a port nothing listens on.
+#   New pods never become Ready. The rollout stalls and after progressDeadlineSeconds
+#   the Progressing condition flips to ProgressDeadlineExceeded.
+#
+# What the agent should detect:
+#   Deployment condition: Progressing=False, reason=ProgressDeadlineExceeded.
+#   Pod events show repeated readiness probe failures.
+#   Agent should read the probe definition and pod events to understand why
+#   pods aren't becoming ready before proposing a fix.
+#
+# Correct fix:
+#   Remove the readiness probe or correct it to point at a port the app actually serves.
+#
+# Apply: kubectl apply -f scenarios/stalled-rollout.yaml
+# Clean up: kubectl delete deployment stalled-rollout-test
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stalled-rollout-test
+  namespace: default
+spec:
+  replicas: 1
+  progressDeadlineSeconds: 60
+  selector:
+    matchLabels:
+      app: stalled-rollout-test
+  template:
+    metadata:
+      labels:
+        app: stalled-rollout-test
+    spec:
+      containers:
+        - name: app
+          image: python:3-slim
+          command: ["python3", "-c", "import time; time.sleep(3600)"]
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9999
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              memory: 32Mi
+            limits:
+              memory: 64Mi

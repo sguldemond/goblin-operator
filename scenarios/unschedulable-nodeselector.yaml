@@ -1,0 +1,43 @@
+# Scenario: unschedulable-nodeselector
+#
+# What's broken:
+#   The Deployment has a nodeSelector requiring label disk=ssd.
+#   No node in the cluster carries that label.
+#   All pods stay Pending indefinitely with reason Unschedulable.
+#
+# What the agent should detect:
+#   Pod events show "0/N nodes are available: N node(s) didn't match node selector."
+#   Agent should check node labels to confirm none match before proposing a fix.
+#
+# Correct fix:
+#   Remove the nodeSelector from the Deployment's pod template,
+#   or change it to a label that exists on at least one node.
+#
+# Apply: kubectl apply -f scenarios/unschedulable-nodeselector.yaml
+# Clean up: kubectl delete deployment nodeselector-test
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nodeselector-test
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nodeselector-test
+  template:
+    metadata:
+      labels:
+        app: nodeselector-test
+    spec:
+      nodeSelector:
+        disk: ssd
+      containers:
+        - name: app
+          image: python:3-slim
+          command: ["python3", "-c", "import time; time.sleep(3600)"]
+          resources:
+            requests:
+              memory: 32Mi
+            limits:
+              memory: 64Mi

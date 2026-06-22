@@ -1,0 +1,40 @@
+# Scenario: unschedulable-resources
+#
+# What's broken:
+#   The Deployment requests more memory than any single node can provide.
+#   All pods stay Pending with reason Unschedulable.
+#
+# What the agent should detect:
+#   Pod events show "Insufficient memory" from the scheduler.
+#   Agent should read actual node capacity to propose a realistic request,
+#   not just halve the number arbitrarily.
+#
+# Correct fix:
+#   Lower the memory request to something within node capacity.
+#
+# Apply: kubectl apply -f scenarios/unschedulable-resources.yaml
+# Clean up: kubectl delete deployment resources-test
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resources-test
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: resources-test
+  template:
+    metadata:
+      labels:
+        app: resources-test
+    spec:
+      containers:
+        - name: app
+          image: python:3-slim
+          command: ["python3", "-c", "import time; time.sleep(3600)"]
+          resources:
+            requests:
+              memory: 1000Gi
+            limits:
+              memory: 1000Gi

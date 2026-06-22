@@ -1,0 +1,55 @@
+# Scenario: quota-exceeded
+#
+# What's broken:
+#   A ResourceQuota limits total memory in the namespace to 100Mi.
+#   The Deployment requests 3 replicas × 50Mi = 150Mi, exceeding the quota.
+#   The ReplicaSet fails to create any pods and emits FailedCreate events.
+#   No pods exist to inspect.
+#
+# What the agent should detect:
+#   ReplicaSet events show "exceeded quota: ... memory" in FailedCreate messages.
+#   Agent must read the quota, current consumption, and the Deployment's resource
+#   requests to understand the shortfall, then propose either a reduced request
+#   or a reduced replica count.
+#
+# Correct fix:
+#   Lower replicas to 2 (2 × 50Mi = 100Mi fits), or lower the memory request per pod.
+#
+# Note: clean up the quota after testing to avoid affecting other scenarios.
+#
+# Apply: kubectl apply -f scenarios/quota-exceeded.yaml
+# Clean up: kubectl delete deployment quota-test && kubectl delete resourcequota goblin-test-quota
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: goblin-test-quota
+  namespace: default
+spec:
+  hard:
+    requests.memory: 100Mi
+    limits.memory: 100Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quota-test
+  namespace: default
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: quota-test
+  template:
+    metadata:
+      labels:
+        app: quota-test
+    spec:
+      containers:
+        - name: app
+          image: python:3-slim
+          command: ["python3", "-c", "import time; time.sleep(3600)"]
+          resources:
+            requests:
+              memory: 50Mi
+            limits:
+              memory: 50Mi
