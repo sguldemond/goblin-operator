@@ -11,7 +11,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -62,7 +61,6 @@ func (s *Scout) Run(ctx context.Context) error {
 	toolList := tools.NewAll(s.client, s.dynCli, mapper,
 		incident.PodNamespace,
 		s.cfg.RemediationName, s.cfg.RemediationNamespace,
-		s.markEscalated, s.markApplied,
 	)
 
 	fmt.Println(">> gathering context...")
@@ -211,30 +209,6 @@ func (s *Scout) runLoop(
 	}
 }
 
-func (s *Scout) markApplied(ctx context.Context) error {
-	patch, _ := json.Marshal(map[string]any{
-		"status": map[string]any{
-			"phase": "Applied",
-		},
-	})
-	_, err := s.dynCli.Resource(remediationGVR).
-		Namespace(s.cfg.RemediationNamespace).
-		Patch(ctx, s.cfg.RemediationName, types.MergePatchType, patch, metav1.PatchOptions{}, "status")
-	return err
-}
-
-func (s *Scout) markEscalated(ctx context.Context, reason string) error {
-	patch, _ := json.Marshal(map[string]any{
-		"status": map[string]any{
-			"phase":   "Escalated",
-			"message": reason,
-		},
-	})
-	_, err := s.dynCli.Resource(remediationGVR).
-		Namespace(s.cfg.RemediationNamespace).
-		Patch(ctx, s.cfg.RemediationName, types.MergePatchType, patch, metav1.PatchOptions{}, "status")
-	return err
-}
 
 func (s *Scout) loadIncident(ctx context.Context) (*Incident, error) {
 	obj, err := s.dynCli.Resource(remediationGVR).

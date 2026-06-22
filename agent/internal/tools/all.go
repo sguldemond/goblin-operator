@@ -1,8 +1,6 @@
 package tools
 
 import (
-	"context"
-
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -16,15 +14,14 @@ func NewAll(
 	targetNamespace string,
 	remediationName string,
 	remediationNamespace string,
-	onEscalate func(ctx context.Context, reason string) error,
-	onApplied func(ctx context.Context) error,
 ) []Tool {
+	status := NewUpdateRemediationStatus(dynCli, remediationName, remediationNamespace)
 	return []Tool{
 		NewGetResource(dynCli, mapper),
 		NewGetPodLogs(client),
-		NewPatchDeployment(client, targetNamespace, onApplied),
-		NewUpdateRemediationStatus(dynCli, remediationName, remediationNamespace),
-		NewEscalate(onEscalate),
+		NewPatchDeployment(client, targetNamespace, status),
+		status,
+		NewEscalate(status),
 		NewExit(),
 	}
 }

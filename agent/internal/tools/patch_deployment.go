@@ -18,7 +18,7 @@ import (
 type PatchDeployment struct {
 	client          kubernetes.Interface
 	targetNamespace string
-	onApplied       func(ctx context.Context) error
+	status          *UpdateRemediationStatus
 	pending         *pendingApproval
 }
 
@@ -30,8 +30,8 @@ type pendingApproval struct {
 	diff       string
 }
 
-func NewPatchDeployment(client kubernetes.Interface, targetNamespace string, onApplied func(ctx context.Context) error) *PatchDeployment {
-	return &PatchDeployment{client: client, targetNamespace: targetNamespace, onApplied: onApplied}
+func NewPatchDeployment(client kubernetes.Interface, targetNamespace string, status *UpdateRemediationStatus) *PatchDeployment {
+	return &PatchDeployment{client: client, targetNamespace: targetNamespace, status: status}
 }
 
 func (t *PatchDeployment) Name() string { return "patchDeployment" }
@@ -173,8 +173,9 @@ func (t *PatchDeployment) verifyRollout(ctx context.Context, namespace, deployNa
 					names[i] = p.Name
 				}
 				suffix := ""
-				if t.onApplied != nil {
-					if err := t.onApplied(ctx); err != nil {
+				if t.status != nil {
+					params, _ := json.Marshal(map[string]string{"phase": "Applied"})
+					if _, err := t.status.Execute(ctx, params); err != nil {
 						suffix = fmt.Sprintf(" (warning: failed to update Remediation phase: %v)", err)
 					}
 				}

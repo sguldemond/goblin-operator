@@ -8,13 +8,13 @@ import (
 )
 
 type Escalate struct {
-	triggered  bool
-	reason     string
-	onEscalate func(ctx context.Context, reason string) error
+	triggered bool
+	reason    string
+	status    *UpdateRemediationStatus
 }
 
-func NewEscalate(onEscalate func(ctx context.Context, reason string) error) *Escalate {
-	return &Escalate{onEscalate: onEscalate}
+func NewEscalate(status *UpdateRemediationStatus) *Escalate {
+	return &Escalate{status: status}
 }
 
 func (t *Escalate) Name() string { return "escalate" }
@@ -52,7 +52,9 @@ func (t *Escalate) AfterTool(ctx context.Context, out io.Writer) (bool, error) {
 		return false, nil
 	}
 	fmt.Fprintf(out, "\n[escalated] %s\n", t.reason)
-	return true, t.onEscalate(ctx, t.reason)
+	params, _ := json.Marshal(map[string]string{"phase": "Escalated", "message": t.reason})
+	_, err := t.status.Execute(ctx, params)
+	return true, err
 }
 
 var _ Tool = (*Escalate)(nil)
