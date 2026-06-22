@@ -16,7 +16,17 @@ func main() {
 	}
 }
 
+const banner = `
+  /\       /\
+ /  \ ___ /  \
+( ⊙  (___) ⊙ )    G O B L I N   S C O U T
+ \   // \\   /     something broke. me fix.
+  '--'   '--'
+`
+
 func run() error {
+	fmt.Print(banner)
+
 	cfg, err := config.Load()
 	if err != nil {
 		return err
