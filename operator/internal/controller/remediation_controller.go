@@ -22,6 +22,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -79,10 +80,7 @@ func (r *RemediationReconciler) handleDetected(ctx context.Context, rem *opsv1al
 	}
 
 	rem.Status.Phase = opsv1alpha1.PhaseAssessing
-	if err := r.Status().Update(ctx, rem); err != nil {
-		return ctrl.Result{}, err
-	}
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, r.statusUpdate(ctx, rem)
 }
 
 func (r *RemediationReconciler) handleAssessing(ctx context.Context, rem *opsv1alpha1.Remediation) (ctrl.Result, error) {
@@ -95,7 +93,7 @@ func (r *RemediationReconciler) handleAssessing(ctx context.Context, rem *opsv1a
 	if job == nil {
 		// Job was deleted externally; re-create on next reconcile by dropping back to Detected.
 		rem.Status.Phase = opsv1alpha1.PhaseDetected
-		return ctrl.Result{}, r.Status().Update(ctx, rem)
+		return ctrl.Result{}, r.statusUpdate(ctx, rem)
 	}
 
 	for _, cond := range job.Status.Conditions {
@@ -103,12 +101,12 @@ func (r *RemediationReconciler) handleAssessing(ctx context.Context, rem *opsv1a
 			log.Info("Scout Job failed, escalating", "remediation", rem.Name)
 			rem.Status.Phase = opsv1alpha1.PhaseEscalated
 			rem.Status.Message = fmt.Sprintf("scout job failed: %s", cond.Message)
-			return ctrl.Result{}, r.Status().Update(ctx, rem)
+			return ctrl.Result{}, r.statusUpdate(ctx, rem)
 		}
 		if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
 			log.Info("Scout Job completed", "remediation", rem.Name)
 			rem.Status.Phase = opsv1alpha1.PhaseAwaitingApproval
-			return ctrl.Result{}, r.Status().Update(ctx, rem)
+			return ctrl.Result{}, r.statusUpdate(ctx, rem)
 		}
 	}
 
@@ -175,6 +173,16 @@ func (r *RemediationReconciler) createScoutJob(ctx context.Context, rem *opsv1al
 		return err
 	}
 	return r.Create(ctx, job)
+}
+
+// statusUpdate writes status and silently requeues on conflict rather than
+// logging an error. Conflicts happen when the agent patches status concurrently.
+func (r *RemediationReconciler) statusUpdate(ctx context.Context, rem *opsv1alpha1.Remediation) error {
+	if err := r.Status().Update(ctx, rem); apierrors.IsConflict(err) {
+		return nil // controller-runtime will requeue on next watch event
+	} else {
+		return err
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager.

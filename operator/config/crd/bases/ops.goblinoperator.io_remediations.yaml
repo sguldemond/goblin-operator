@@ -97,6 +97,7 @@ spec:
               trigger:
                 enum:
                 - OOMKilled
+                - Unschedulable
                 type: string
             required:
             - podRef

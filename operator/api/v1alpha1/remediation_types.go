@@ -49,7 +49,7 @@ const (
 type RemediationSpec struct {
 	PodRef corev1.ObjectReference `json:"podRef"`
 
-	// +kubebuilder:validation:Enum=OOMKilled
+	// +kubebuilder:validation:Enum=OOMKilled;Unschedulable
 	Trigger string `json:"trigger"`
 
 	// +kubebuilder:default=2

@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -35,7 +36,7 @@ import (
 
 const podUIDLabel = "goblinoperator.io/pod-uid"
 
-// PodReconciler watches Pods and creates Remediation CRs for OOMKilled containers.
+// PodReconciler watches Pods and creates Remediation CRs for failed pods.
 type PodReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -53,11 +54,12 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if !hasOOMKilled(pod) {
+	trigger := detectTrigger(pod)
+	if trigger == "" {
 		return ctrl.Result{}, nil
 	}
 
-	// Check for an existing Remediation for this pod incident.
+	// One Remediation per pod UID — idempotency across trigger types.
 	var existing opsv1alpha1.RemediationList
 	if err := r.List(ctx, &existing,
 		client.InNamespace(req.Namespace),
@@ -69,9 +71,10 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, nil
 	}
 
+	namePrefix := strings.ToLower(trigger) + "-" + pod.Name + "-"
 	rem := &opsv1alpha1.Remediation{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "oom-" + pod.Name + "-",
+			GenerateName: namePrefix,
 			Namespace:    req.Namespace,
 			Labels:       map[string]string{podUIDLabel: string(pod.UID)},
 		},
@@ -83,7 +86,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 				Namespace:  pod.Namespace,
 				UID:        pod.UID,
 			},
-			Trigger:     "OOMKilled",
+			Trigger:     trigger,
 			MaxAttempts: 2,
 		},
 	}
@@ -95,14 +98,24 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, err
 	}
 
-	// Set initial phase via status subresource.
 	rem.Status.Phase = opsv1alpha1.PhaseDetected
 	if err := r.Status().Update(ctx, rem); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	log.Info("Created Remediation for OOMKilled pod", "pod", req.NamespacedName, "remediation", rem.Name)
+	log.Info("Created Remediation", "trigger", trigger, "pod", req.NamespacedName, "remediation", rem.Name)
 	return ctrl.Result{}, nil
+}
+
+// detectTrigger returns the trigger type for a pod that needs remediation, or "".
+func detectTrigger(pod corev1.Pod) string {
+	if hasOOMKilled(pod) {
+		return "OOMKilled"
+	}
+	if hasUnschedulable(pod) {
+		return "Unschedulable"
+	}
+	return ""
 }
 
 func hasOOMKilled(pod corev1.Pod) bool {
@@ -115,21 +128,35 @@ func hasOOMKilled(pod corev1.Pod) bool {
 	return false
 }
 
-// oomKilledPredicate fires only when a pod has an OOMKilled container in lastState.
-var oomKilledPredicate = predicate.Funcs{
+func hasUnschedulable(pod corev1.Pod) bool {
+	if pod.Status.Phase != corev1.PodPending {
+		return false
+	}
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodScheduled &&
+			cond.Status == corev1.ConditionFalse &&
+			cond.Reason == "Unschedulable" {
+			return true
+		}
+	}
+	return false
+}
+
+// podFailurePredicate fires when a pod has an actionable failure condition.
+var podFailurePredicate = predicate.Funcs{
 	CreateFunc: func(e event.CreateEvent) bool {
 		pod, ok := e.Object.(*corev1.Pod)
 		if !ok {
 			return false
 		}
-		return hasOOMKilled(*pod)
+		return detectTrigger(*pod) != ""
 	},
 	UpdateFunc: func(e event.UpdateEvent) bool {
 		pod, ok := e.ObjectNew.(*corev1.Pod)
 		if !ok {
 			return false
 		}
-		return hasOOMKilled(*pod)
+		return detectTrigger(*pod) != ""
 	},
 	DeleteFunc:  func(event.DeleteEvent) bool { return false },
 	GenericFunc: func(event.GenericEvent) bool { return false },
@@ -137,7 +164,7 @@ var oomKilledPredicate = predicate.Funcs{
 
 func (r *PodReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&corev1.Pod{}, builder.WithPredicates(oomKilledPredicate)).
-		Named("pod-oomkilled").
+		For(&corev1.Pod{}, builder.WithPredicates(podFailurePredicate)).
+		Named("pod-failure").
 		Complete(r)
 }
