@@ -6,6 +6,8 @@ When pod die, me wake up. Me look at logs. Me look at events. Me figure out what
 
 Me tell you. You say yes. Me fix.
 
+![goblin-scout](docs/images/goblin-scout.png)
+
 ---
 
 ## What me do
