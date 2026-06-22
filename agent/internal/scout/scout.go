@@ -60,7 +60,7 @@ func (s *Scout) Run(ctx context.Context) error {
 	mapper := restmapper.NewDiscoveryRESTMapper(gr)
 
 	toolList := tools.NewAll(s.client, s.dynCli, mapper,
-		s.cfg.RemediationNamespace,
+		incident.PodNamespace,
 		s.cfg.RemediationName, s.cfg.RemediationNamespace,
 		s.markEscalated, s.markApplied,
 	)

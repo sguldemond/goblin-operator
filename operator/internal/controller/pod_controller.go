@@ -39,7 +39,8 @@ const podUIDLabel = "goblinoperator.io/pod-uid"
 // PodReconciler watches Pods and creates Remediation CRs for failed pods.
 type PodReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme               *runtime.Scheme
+	RemediationNamespace string
 }
 
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
@@ -60,9 +61,13 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	}
 
 	// One Remediation per pod UID — idempotency across trigger types.
+	remNS := r.RemediationNamespace
+	if remNS == "" {
+		remNS = req.Namespace
+	}
 	var existing opsv1alpha1.RemediationList
 	if err := r.List(ctx, &existing,
-		client.InNamespace(req.Namespace),
+		client.InNamespace(remNS),
 		client.MatchingLabels{podUIDLabel: string(pod.UID)},
 	); err != nil {
 		return ctrl.Result{}, err
@@ -75,7 +80,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	rem := &opsv1alpha1.Remediation{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: namePrefix,
-			Namespace:    req.Namespace,
+			Namespace:    remNS,
 			Labels:       map[string]string{podUIDLabel: string(pod.UID)},
 		},
 		Spec: opsv1alpha1.RemediationSpec{

@@ -187,10 +187,11 @@ func main() {
 	}
 
 	if err := (&controller.PodReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:               mgr.GetClient(),
+		Scheme:               mgr.GetScheme(),
+		RemediationNamespace: "goblin",
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "pod-oomkilled")
+		setupLog.Error(err, "Failed to create controller", "controller", "pod-failure")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

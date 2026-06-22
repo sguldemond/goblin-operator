@@ -11,7 +11,8 @@ Me tell you. You say yes. Me fix.
 ## What me do
 
 - Pod OOMKilled? Me see it.
-- Me read logs, check memory, look at everything.
+- Pod stuck Unschedulable? Me see that too.
+- Me read logs, check events, look at everything.
 - Me tell you what happened and what me think we should do.
 - You approve. Me patch Deployment. Pod live again.
 
@@ -27,24 +28,63 @@ Pod die
   → Me investigate
   → Me talk to you: kubectl attach -it <goblin-scout-pod>
   → You say yes → me fix
+  → Me check it worked
+  → Me update Remediation, me done
 ```
 
 ---
 
-## How to start
+## How to put me in cluster
+
+First time only. Me need images, power, and secret.
+
+**Step 1: build me and push me**
 
 ```bash
-# Give me power
-cd operator && make install && make deploy
+docker compose push
+```
 
-# Give me secret (API key)
-kubectl create secret generic goblin-scout-secrets --from-env-file=agent/.env
+**Step 2: install CRDs and give me power**
 
-# Break something
-kubectl apply -f debug/oom-pod.yaml
+```bash
+make -C operator deploy
+```
 
-# Talk to me when me appear
-kubectl attach -it <goblin-scout-pod> -n default
+**Step 3: give me the API key**
+
+```bash
+ANTHROPIC_API_KEY=sk-... make -C operator secret
+```
+
+Me forget key if you restart. Run again if you change it.
+
+---
+
+## How to summon me
+
+Break something, me come running.
+
+```bash
+# OOMKilled
+kubectl apply -f scenarios/oom-killed.yaml
+
+# Pod stuck, no node has right label
+kubectl apply -f scenarios/unschedulable-nodeselector.yaml
+
+# Pod wants too much memory
+kubectl apply -f scenarios/unschedulable-resources.yaml
+
+# Rollout stuck
+kubectl apply -f scenarios/stalled-rollout.yaml
+
+# Namespace quota full
+kubectl apply -f scenarios/quota-exceeded.yaml
+```
+
+Wait for goblin-scout pod to appear, then talk to me:
+
+```bash
+kubectl attach -it $(kubectl get pod -l job-name -o name | grep goblin-scout | head -1) -n default
 ```
 
 ---
@@ -52,7 +92,7 @@ kubectl attach -it <goblin-scout-pod> -n default
 ## Where me live
 
 ```
-operator/   me get summoned from here
-agent/      me brain live here
-debug/      oom-pod.yaml — for when you want to test me
+operator/     me get summoned from here
+agent/        me brain live here
+scenarios/    things you can break to test me
 ```

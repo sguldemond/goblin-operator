@@ -1,5 +1,5 @@
 # Image URL to use all building/pushing image targets
-IMG ?= controller:latest
+IMG ?= sguldemond/goblin-operator:latest
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)
 
@@ -170,6 +170,15 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
 	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" apply -f -
+	"$(KUBECTL)" apply -f config/rbac/scout_serviceaccount.yaml
+	"$(KUBECTL)" apply -f config/rbac/scout_role.yaml
+	"$(KUBECTL)" apply -f config/rbac/scout_role_binding.yaml
+
+.PHONY: secret
+secret: ## Create the goblin-scout-secrets Secret from ANTHROPIC_API_KEY env var.
+	"$(KUBECTL)" create secret generic goblin-scout-secrets \
+		--from-literal=API_KEY="$(ANTHROPIC_API_KEY)" \
+		--dry-run=client -o yaml | "$(KUBECTL)" apply -n goblin -f -
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
