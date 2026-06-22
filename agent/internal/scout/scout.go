@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -70,8 +71,39 @@ func (s *Scout) Run(ctx context.Context) error {
 
 	fmt.Println(">> waking the goblin...")
 
+	in, out := io.Reader(os.Stdin), io.Writer(os.Stdout)
+	if pipeDir := os.Getenv("GOBLIN_PIPE_DIR"); pipeDir != "" {
+		pr, pw, err := openPipes(pipeDir)
+		if err != nil {
+			return fmt.Errorf("opening pipes: %w", err)
+		}
+		defer pr.Close()
+		defer pw.Close()
+		in = pr
+		out = io.MultiWriter(os.Stdout, pw)
+		fmt.Println(">> pipe mode: I/O via goblin-horn sidecar")
+	}
+
 	c := llm.NewClient(s.cfg.APIKey)
-	return s.runLoop(ctx, c.Send, contextMsg, toolList, os.Stdin, os.Stdout)
+	return s.runLoop(ctx, c.Send, contextMsg, toolList, in, out)
+}
+
+// openPipes opens the named pipes created by goblin-horn.
+// Both are opened O_RDWR so the open does not block regardless of which side
+// connects first. Reads from inbox block when empty (desired: mimics stdin).
+// The write end of outbox is held open by the fd itself so goblin-horn's
+// O_RDONLY open can always connect.
+func openPipes(dir string) (inbox, outbox *os.File, err error) {
+	outbox, err = os.OpenFile(filepath.Join(dir, "outbox"), os.O_RDWR, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("outbox: %w", err)
+	}
+	inbox, err = os.OpenFile(filepath.Join(dir, "inbox"), os.O_RDWR, 0)
+	if err != nil {
+		outbox.Close()
+		return nil, nil, fmt.Errorf("inbox: %w", err)
+	}
+	return inbox, outbox, nil
 }
 
 type sendFn func(ctx context.Context, req llm.Request) (llm.Response, error)

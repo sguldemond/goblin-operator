@@ -10,3 +10,9 @@ services:
       context: ./agent
       dockerfile: Dockerfile
     image: sguldemond/goblin-scout:latest
+
+  telegram:
+    build:
+      context: ./telegram
+      dockerfile: Dockerfile
+    image: sguldemond/goblin-horn:latest
