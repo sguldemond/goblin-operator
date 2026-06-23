@@ -80,41 +80,50 @@ func (b *Bot) tailOutbox(outbox io.Reader) {
 }
 
 func (b *Bot) handleToken(token string) {
+	log.Printf("← scout: %q", token)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	switch {
 	case strings.HasSuffix(token, "Goblin wants to exit. OK? [y/n]: "):
 		b.flushLocked()
-		b.tg.SendMessage("🚪 Goblin wants to exit.", &tgbot.InlineKeyboard{
+		if err := b.tg.SendMessage("🚪 Goblin wants to exit.", &tgbot.InlineKeyboard{
 			InlineKeyboard: [][]tgbot.InlineButton{{
 				{Text: "👋 Let it go", CallbackData: b.remName + ":y"},
 				{Text: "🚫 Stay", CallbackData: b.remName + ":n"},
 			}},
-		})
+		}); err != nil {
+			log.Printf("sendMessage (exit prompt): %v", err)
+		}
 		b.cur = stateAwaitingExit
 
 	case strings.HasSuffix(token, "Apply? [y/n]: "):
 		b.textBuf.WriteString(token)
 		b.flushLocked()
-		b.tg.SendMessage("Approve this patch?", &tgbot.InlineKeyboard{
+		if err := b.tg.SendMessage("Approve this patch?", &tgbot.InlineKeyboard{
 			InlineKeyboard: [][]tgbot.InlineButton{{
 				{Text: "✅ Apply", CallbackData: b.remName + ":y"},
 				{Text: "❌ Reject", CallbackData: b.remName + ":n"},
 			}},
-		})
+		}); err != nil {
+			log.Printf("sendMessage (apply prompt): %v", err)
+		}
 		b.cur = stateAwaitingYN
 
 	case strings.HasSuffix(token, "Rejection reason (optional): "):
 		b.flushLocked()
-		b.tg.SendMessage("Rejection reason? (reply with text, or /skip)", nil)
+		if err := b.tg.SendMessage("Rejection reason? (reply with text, or /skip)", nil); err != nil {
+			log.Printf("sendMessage (reason prompt): %v", err)
+		}
 		b.cur = stateAwaitingReason
 
 	case strings.HasSuffix(token, "\n> "):
 		// Strip the trailing "> " — we send our own cue
 		b.textBuf.WriteString(strings.TrimSuffix(token, "\n> "))
 		b.flushLocked()
-		b.tg.SendMessage("💬 Your turn — reply to continue:", nil)
+		if err := b.tg.SendMessage("💬 Your turn — reply to continue:", nil); err != nil {
+			log.Printf("sendMessage (chat prompt): %v", err)
+		}
 		b.cur = stateAwaitingChat
 
 	default:
@@ -136,11 +145,15 @@ func (b *Bot) flushLocked() {
 	}
 	// Telegram max message size is 4096 chars.
 	for len(text) > 4000 {
-		b.tg.SendMessage(text[:4000], nil)
+		if err := b.tg.SendMessage(text[:4000], nil); err != nil {
+			log.Printf("sendMessage: %v", err)
+		}
 		text = text[4000:]
 	}
 	if text != "" {
-		b.tg.SendMessage(text, nil)
+		if err := b.tg.SendMessage(text, nil); err != nil {
+			log.Printf("sendMessage: %v", err)
+		}
 	}
 }
 
@@ -169,6 +182,7 @@ func (b *Bot) writeToScout(s string) {
 		log.Printf("writeToScout: scout not connected, dropping %q", s)
 		return
 	}
+	log.Printf("→ scout: %q", s)
 	if _, err := io.WriteString(f, s); err != nil {
 		log.Printf("writeToScout: %v", err)
 	}
@@ -288,12 +302,21 @@ func main() {
 	// Once connected, start tailing.
 	go func() {
 		outboxPath := filepath.Join(pipeDir, "outbox")
-		f, err := os.Open(outboxPath) // O_RDONLY, blocks until scout opens O_RDWR
+		// O_RDWR avoids blocking on open regardless of when the scout connects,
+		// same trick the scout uses. Reads still block when the pipe is empty.
+		f, err := os.OpenFile(outboxPath, os.O_RDWR, 0)
 		if err != nil {
 			log.Fatalf("outbox open: %v", err)
 		}
 		defer f.Close()
+		log.Println("goblin-horn: outbox open, tailing scout output")
 		b.tailOutbox(f)
+		// Scout process exited — flush any remaining buffer and notify Telegram.
+		b.mu.Lock()
+		b.flushLocked()
+		b.mu.Unlock()
+		b.tg.SendMessage("👻 Goblin scout session ended.", nil)
+		log.Println("goblin-horn: scout disconnected")
 	}()
 
 	log.Printf("goblin-horn: waiting for scout (%s)…", remName)
