@@ -33,6 +33,7 @@ import (
 )
 
 const remediationJobLabel = "goblinoperator.io/remediation"
+const noAutoRemediateAnnotation = "goblinoperator.io/no-auto-remediate"
 
 // RemediationReconciler reconciles a Remediation object
 type RemediationReconciler struct {
@@ -67,6 +68,18 @@ func (r *RemediationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 func (r *RemediationReconciler) handleDetected(ctx context.Context, rem *opsv1alpha1.Remediation) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+
+	// If the pod carries the no-auto-remediate annotation, skip job creation.
+	// The Remediation CR is still created so a local scout can handle it manually.
+	var pod corev1.Pod
+	podKey := client.ObjectKey{Name: rem.Spec.PodRef.Name, Namespace: rem.Spec.PodRef.Namespace}
+	if err := r.Get(ctx, podKey, &pod); err == nil {
+		if pod.Annotations[noAutoRemediateAnnotation] == "true" {
+			log.Info("Pod opted out of auto-remediation, skipping job", "pod", podKey, "remediation", rem.Name)
+			rem.Status.Phase = opsv1alpha1.PhaseAssessing
+			return ctrl.Result{}, r.statusUpdate(ctx, rem)
+		}
+	}
 
 	// Idempotency: check for an existing Job.
 	existing, err := r.findJob(ctx, rem)
