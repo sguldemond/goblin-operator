@@ -17,11 +17,11 @@ func main() {
 }
 
 const banner = `
-  /\       /\
- /  \ ___ /  \
-( ⊙  (___) ⊙ )    G O B L I N   S C O U T
- \   // \\   /     something broke. me fix.
-  '--'   '--'
+  ^^     ^^
+(  ⊙   ⊙  )
+(    ___   )   G O B L I N   S C O U T
+ \  (   )  /   something broke. me fix.
+  '-'   '-'
 `
 
 func run() error {
