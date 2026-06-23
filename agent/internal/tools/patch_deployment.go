@@ -26,7 +26,6 @@ type pendingApproval struct {
 	deployName string
 	namespace  string
 	patch      json.RawMessage
-	reasoning  string
 	diff       string
 }
 
@@ -37,8 +36,11 @@ func NewPatchDeployment(client kubernetes.Interface, targetNamespace string, sta
 func (t *PatchDeployment) Name() string { return "patchDeployment" }
 
 func (t *PatchDeployment) Description() string {
-	return "Dry-run a JSON merge patch against a Deployment and return a diff for human review. " +
+	return "Dry-run a strategic merge patch against a Deployment and return a diff for human review. " +
 		"This tool NEVER applies changes — it only computes what would change. " +
+		"Containers are matched by 'name'; only include the fields you want to change — " +
+		"unspecified fields are preserved automatically. " +
+		"After calling this tool you will receive the diff as output: respond with Cause and Fix labels. " +
 		"Call this only when confident in a fix; use escalate if unsure."
 }
 
@@ -48,10 +50,9 @@ func (t *PatchDeployment) InputSchema() json.RawMessage {
 		"properties": {
 			"deploymentName": {"type": "string", "description": "Name of the Deployment to patch"},
 			"namespace":      {"type": "string", "description": "Namespace of the Deployment"},
-			"patch":          {"type": "object", "description": "JSON merge patch body"},
-			"reasoning":      {"type": "string", "description": "Why this fix is safe and correct"}
+			"patch":          {"type": "object", "description": "Strategic merge patch body. For containers, include only 'name' (to identify) and the fields to change — all other fields are preserved automatically."}
 		},
-		"required": ["deploymentName", "namespace", "patch", "reasoning"]
+		"required": ["deploymentName", "namespace", "patch"]
 	}`)
 }
 
@@ -59,7 +60,6 @@ type patchDeploymentParams struct {
 	DeploymentName string          `json:"deploymentName"`
 	Namespace      string          `json:"namespace"`
 	Patch          json.RawMessage `json:"patch"`
-	Reasoning      string          `json:"reasoning"`
 }
 
 func (t *PatchDeployment) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -77,7 +77,7 @@ func (t *PatchDeployment) Execute(ctx context.Context, raw json.RawMessage) (str
 	}
 
 	dryRun, err := t.client.AppsV1().Deployments(p.Namespace).Patch(
-		ctx, p.DeploymentName, types.MergePatchType, p.Patch,
+		ctx, p.DeploymentName, types.StrategicMergePatchType, p.Patch,
 		metav1.PatchOptions{DryRun: []string{"All"}},
 	)
 	if err != nil {
@@ -92,7 +92,6 @@ func (t *PatchDeployment) Execute(ctx context.Context, raw json.RawMessage) (str
 		deployName: p.DeploymentName,
 		namespace:  p.Namespace,
 		patch:      p.Patch,
-		reasoning:  p.Reasoning,
 		diff:       diff,
 	}
 
@@ -104,9 +103,8 @@ func (t *PatchDeployment) Active() bool { return t.pending != nil }
 func (t *PatchDeployment) AfterTurn(ctx context.Context, scanner *bufio.Scanner, out io.Writer) ([]string, bool, error) {
 	p := t.pending
 
-	fmt.Fprintf(out, "\n--- proposed patch: %s/%s ---\n", p.namespace, p.deployName)
+	fmt.Fprintf(out, "\nDiff: %s/%s\n", p.namespace, p.deployName)
 	fmt.Fprintln(out, p.diff)
-	fmt.Fprintf(out, "\nReasoning: %s\n", p.reasoning)
 	fmt.Fprint(out, "\nApply? [y/n]: ")
 
 	if !scanner.Scan() {
@@ -116,7 +114,7 @@ func (t *PatchDeployment) AfterTurn(ctx context.Context, scanner *bufio.Scanner,
 
 	if strings.TrimSpace(strings.ToLower(scanner.Text())) == "y" {
 		_, err := t.client.AppsV1().Deployments(p.namespace).Patch(
-			ctx, p.deployName, types.MergePatchType, p.patch, metav1.PatchOptions{},
+			ctx, p.deployName, types.StrategicMergePatchType, p.patch, metav1.PatchOptions{},
 		)
 		t.pending = nil
 		if err != nil {
@@ -168,18 +166,22 @@ func (t *PatchDeployment) verifyRollout(ctx context.Context, namespace, deployNa
 			}
 			fmt.Fprintf(out, "  %d/%d pods ready\n", ready, len(pods.Items))
 			if ready == len(pods.Items) {
+				remStatus := "Applied"
+				remNote := ""
+				if t.status != nil {
+					params, _ := json.Marshal(map[string]string{"phase": "Applied"})
+					if _, err := t.status.Execute(ctx, params); err != nil {
+						remStatus = "Applied (warning: status update failed)"
+						remNote = fmt.Sprintf(" (%v)", err)
+					}
+				}
 				names := make([]string, len(pods.Items))
 				for i, p := range pods.Items {
 					names[i] = p.Name
 				}
-				suffix := ""
-				if t.status != nil {
-					params, _ := json.Marshal(map[string]string{"phase": "Applied"})
-					if _, err := t.status.Execute(ctx, params); err != nil {
-						suffix = fmt.Sprintf(" (warning: failed to update Remediation phase: %v)", err)
-					}
-				}
-				return fmt.Sprintf("Rollout successful. %d/%d pods ready: %s%s", ready, len(pods.Items), strings.Join(names, ", "), suffix)
+				fmt.Fprintf(out, "Pod status: %d/%d ready — %s\n", ready, len(pods.Items), strings.Join(names, ", "))
+				fmt.Fprintf(out, "Remediation status: %s%s\n", remStatus, remNote)
+				return fmt.Sprintf("Pod status: %d/%d ready. Remediation status: %s.", ready, len(pods.Items), remStatus)
 			}
 		}
 
