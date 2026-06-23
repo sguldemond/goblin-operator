@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -133,7 +134,9 @@ func (s *Scout) runLoop(
 
 	scanner := bufio.NewScanner(in)
 
+loop:
 	for {
+		stopSpinner := startSpinner()
 		resp, err := send(ctx, llm.Request{
 			Model:     model,
 			MaxTokens: maxTokens,
@@ -141,6 +144,7 @@ func (s *Scout) runLoop(
 			Messages:  messages,
 			Tools:     toolDefs,
 		})
+		stopSpinner()
 		if err != nil {
 			return fmt.Errorf("LLM call failed: %w", err)
 		}
@@ -234,13 +238,38 @@ func (s *Scout) runLoop(
 				break
 			}
 		}
+
+		// Exit keywords bypass the LLM — trigger the exit tool directly.
+		if lower := strings.ToLower(line); lower == "exit" || lower == "bye" {
+			for _, t := range toolList {
+				if t.Name() != "exit" {
+					continue
+				}
+				t.Execute(ctx, nil) //nolint:errcheck
+				h := t.(tools.AfterTurnHook)
+				msgs, stop, err := h.AfterTurn(ctx, scanner, out)
+				if err != nil {
+					return err
+				}
+				if stop {
+					return nil
+				}
+				for _, m := range msgs {
+					messages = append(messages, llm.Message{
+						Role:    "user",
+						Content: []llm.Content{{Type: "text", Text: m}},
+					})
+				}
+				continue loop
+			}
+		}
+
 		messages = append(messages, llm.Message{
 			Role:    "user",
 			Content: []llm.Content{{Type: "text", Text: line}},
 		})
 	}
 }
-
 
 func (s *Scout) loadIncident(ctx context.Context) (*Incident, error) {
 	obj, err := s.dynCli.Resource(remediationGVR).
@@ -284,7 +313,7 @@ func (s *Scout) gatherContext(ctx context.Context, incident *Incident, getResour
 			"name": incident.PodName, "namespace": incident.PodNamespace,
 		}),
 		call(getResource, map[string]string{
-			"apiVersion":    "v1", "kind": "Event",
+			"apiVersion": "v1", "kind": "Event",
 			"namespace":     incident.PodNamespace,
 			"fieldSelector": "involvedObject.name=" + incident.PodName,
 		}),
@@ -309,4 +338,32 @@ func stringField(m map[string]any, key string) string {
 	}
 	v, _ := m[key].(string)
 	return v
+}
+
+// startSpinner shows an in-place "thinking..." indicator on stdout.
+// Uses \r to overwrite so multiple LLM round-trips don't stack new lines.
+// Writes directly to os.Stdout to stay out of the goblin-horn pipe.
+func startSpinner() func() {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		n := 0
+		for {
+			select {
+			case <-stop:
+				fmt.Fprint(os.Stdout, "\r                \r")
+				return
+			case <-ticker.C:
+				n++
+				fmt.Fprintf(os.Stdout, "\r>> thinking%-3s", strings.Repeat(".", n%4))
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+	}
 }
