@@ -38,21 +38,13 @@ Pod die
 
 ## How to put me in cluster
 
-First time only. Me need images, power, and secret.
-
-**Step 1: build me and push me**
-
-```bash
-docker compose push
-```
-
-**Step 2: install CRDs and give me power**
+**Step 1: install CRDs and give me power**
 
 ```bash
 make -C operator deploy
 ```
 
-**Step 3: give me the API key**
+**Step 2: give me the API key**
 
 ```bash
 ANTHROPIC_API_KEY=sk-... make -C operator secret
@@ -86,7 +78,7 @@ kubectl apply -f scenarios/quota-exceeded.yaml
 Wait for goblin-scout pod to appear, then talk to me:
 
 ```bash
-kubectl attach -it $(kubectl get pod -l job-name -o name | grep goblin-scout | head -1) -n default
+kubectl attach -it -n goblin $(kubectl get pod -n goblin -l "goblinoperator.io/remediation" -o name | head -1)
 ```
 
 ---

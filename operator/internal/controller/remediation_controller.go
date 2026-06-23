@@ -197,7 +197,7 @@ func (r *RemediationReconciler) createScoutJob(ctx context.Context, rem *opsv1al
 			VolumeMounts: []corev1.VolumeMount{{Name: "shared", MountPath: "/shared"}},
 		})
 		podSpec.Volumes = []corev1.Volume{{
-			Name: "shared",
+			Name:         "shared",
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		}}
 	}
@@ -210,7 +210,14 @@ func (r *RemediationReconciler) createScoutJob(ctx context.Context, rem *opsv1al
 		},
 		Spec: batchv1.JobSpec{
 			TTLSecondsAfterFinished: &ttl,
-			Template:                corev1.PodTemplateSpec{Spec: podSpec},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						remediationJobLabel: rem.Name,
+					},
+				},
+				Spec: podSpec,
+			},
 		},
 	}
 
