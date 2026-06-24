@@ -1,6 +1,9 @@
 package llm
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
 
 type Request struct {
 	Model     string    `json:"model"`
@@ -37,3 +40,6 @@ type Response struct {
 	Content    []Content `json:"content"`
 	StopReason string    `json:"stop_reason"` // "end_turn" | "tool_use"
 }
+
+// SendFunc is the provider-agnostic function signature used throughout the agent.
+type SendFunc = func(ctx context.Context, req Request) (Response, error)

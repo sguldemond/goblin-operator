@@ -56,10 +56,10 @@ cp .env.example .env
 Then:
 
 ```bash
-make -C operator secret
+make -C operator secrets
 ```
 
-Me read `.env` automatically. Me forget secrets if you delete them from cluster.
+Me read `.env` automatically. Add Telegram vars later? Just run `make -C operator secrets` again.
 
 ---
 
@@ -104,10 +104,10 @@ If you give me bot token, me send messages to your phone.
 curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | jq '.result[0].message.chat.id'
 ```
 
-**Step 3: give me secrets in .env**
+**Step 3: add Telegram vars to `.env`, rerun secrets**
 
 ```bash
-make -C operator horn-secret
+make -C operator secrets
 ```
 
 Secret exist → me use Telegram. Secret not exist → find me in `kubectl attach`.

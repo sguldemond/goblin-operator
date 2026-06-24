@@ -113,7 +113,11 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 }
 
 // detectTrigger returns the trigger type for a pod that needs remediation, or "".
+// Pods annotated with noAutoRemediateAnnotation are excluded to prevent spawn loops.
 func detectTrigger(pod corev1.Pod) string {
+	if pod.Annotations[noAutoRemediateAnnotation] == "true" {
+		return ""
+	}
 	if hasOOMKilled(pod) {
 		return "OOMKilled"
 	}

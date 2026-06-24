@@ -174,20 +174,20 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 	"$(KUBECTL)" apply -f config/rbac/scout_role.yaml
 	"$(KUBECTL)" apply -f config/rbac/scout_role_binding.yaml
 
-.PHONY: secret
-secret: ## Create goblin-scout-secrets from API_KEY (reads ../.env if present).
+.PHONY: secrets
+secrets: ## Create/update all secrets from .env (re-run after adding Telegram creds).
 	@set -a; [ -f ../.env ] && . ../.env; set +a; \
 	"$(KUBECTL)" create secret generic goblin-scout-secrets \
-		--from-literal=API_KEY="$$API_KEY" \
-		--dry-run=client -o yaml | "$(KUBECTL)" apply -n goblin -f -
-
-.PHONY: horn-secret
-horn-secret: ## Create goblin-horn-secrets from TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID (reads ../.env if present).
-	@set -a; [ -f ../.env ] && . ../.env; set +a; \
-	"$(KUBECTL)" create secret generic goblin-horn-secrets \
-		--from-literal=TELEGRAM_BOT_TOKEN="$$TELEGRAM_BOT_TOKEN" \
-		--from-literal=TELEGRAM_CHAT_ID="$$TELEGRAM_CHAT_ID" \
-		--dry-run=client -o yaml | "$(KUBECTL)" apply -n goblin -f -
+		--from-literal=LLM_API_KEY="$$LLM_API_KEY" \
+		--dry-run=client -o yaml | "$(KUBECTL)" apply -n goblin -f -; \
+	if [ -n "$$TELEGRAM_BOT_TOKEN" ] && [ -n "$$TELEGRAM_CHAT_ID" ]; then \
+		"$(KUBECTL)" create secret generic goblin-horn-secrets \
+			--from-literal=TELEGRAM_BOT_TOKEN="$$TELEGRAM_BOT_TOKEN" \
+			--from-literal=TELEGRAM_CHAT_ID="$$TELEGRAM_CHAT_ID" \
+			--dry-run=client -o yaml | "$(KUBECTL)" apply -n goblin -f -; \
+	else \
+		echo ">> skipping goblin-horn-secrets (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set)"; \
+	fi
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.

@@ -123,8 +123,39 @@ func (r *RemediationReconciler) handleAssessing(ctx context.Context, rem *opsv1a
 		}
 	}
 
+	// Check for pod-level pre-start failures (e.g. missing secret key).
+	if msg := r.scoutPodFailureMessage(ctx, rem.Namespace, rem.Name); msg != "" {
+		log.Info("Scout pod stuck in pre-start failure, escalating", "remediation", rem.Name, "reason", msg)
+		rem.Status.Phase = opsv1alpha1.PhaseEscalated
+		rem.Status.Message = fmt.Sprintf("scout pod cannot start: %s", msg)
+		return ctrl.Result{}, r.statusUpdate(ctx, rem)
+	}
+
 	// Job still running.
 	return ctrl.Result{}, nil
+}
+
+// scoutPodFailureMessage returns the waiting message if the scout pod is stuck
+// in a pre-start failure state (CreateContainerConfigError, ImagePullBackOff, etc.).
+func (r *RemediationReconciler) scoutPodFailureMessage(ctx context.Context, namespace, remName string) string {
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods,
+		client.InNamespace(namespace),
+		client.MatchingLabels{remediationJobLabel: remName},
+	); err != nil {
+		return ""
+	}
+	for _, pod := range pods.Items {
+		for _, cs := range pod.Status.ContainerStatuses {
+			if cs.State.Waiting != nil {
+				switch cs.State.Waiting.Reason {
+				case "CreateContainerConfigError", "ImagePullBackOff", "ErrImagePull", "InvalidImageName":
+					return cs.State.Waiting.Message
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func (r *RemediationReconciler) findJob(ctx context.Context, rem *opsv1alpha1.Remediation) (*batchv1.Job, error) {
@@ -143,21 +174,21 @@ func (r *RemediationReconciler) findJob(ctx context.Context, rem *opsv1alpha1.Re
 
 func (r *RemediationReconciler) createScoutJob(ctx context.Context, rem *opsv1alpha1.Remediation) error {
 	ttl := int32(300)
+	optional := true
 
 	scoutEnv := []corev1.EnvVar{
 		{Name: "REMEDIATION_NAME", Value: rem.Name},
 		{Name: "REMEDIATION_NAMESPACE", Value: rem.Namespace},
 		{
-			Name: "API_KEY",
+			Name: "LLM_API_KEY",
 			ValueFrom: &corev1.EnvVarSource{
 				SecretKeyRef: &corev1.SecretKeySelector{
 					LocalObjectReference: corev1.LocalObjectReference{Name: "goblin-scout-secrets"},
-					Key:                  "API_KEY",
+					Key:                  "LLM_API_KEY",
 				},
 			},
 		},
 	}
-	optional := true
 	scoutEnv = append(scoutEnv,
 		corev1.EnvVar{
 			Name: "TELEGRAM_BOT_TOKEN",
@@ -204,9 +235,8 @@ func (r *RemediationReconciler) createScoutJob(ctx context.Context, rem *opsv1al
 			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						remediationJobLabel: rem.Name,
-					},
+					Labels:      map[string]string{remediationJobLabel: rem.Name},
+					Annotations: map[string]string{noAutoRemediateAnnotation: "true"},
 				},
 				Spec: podSpec,
 			},

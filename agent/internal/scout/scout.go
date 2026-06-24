@@ -29,7 +29,6 @@ var remediationGVR = schema.GroupVersionResource{
 	Resource: "remediations",
 }
 
-const model = "claude-sonnet-4-6"
 const maxTokens = 8192
 
 type Scout struct {
@@ -81,16 +80,23 @@ func (s *Scout) Run(ctx context.Context) error {
 		}
 		m = tg
 		fmt.Println(">> telegram mode")
-		tg.Send(fmt.Sprintf("🔔 Goblin scout dispatched: <b>%s</b>", s.cfg.RemediationName)) //nolint:errcheck
+		tg.Send(fmt.Sprintf("🔔 Pod <code>%s/%s</code> — <b>%s</b>\n\nScout dispatched, investigating now.", incident.PodNamespace, incident.PodName, incident.Trigger)) //nolint:errcheck
 	} else {
 		m = messenger.NewTTY(os.Stdin, os.Stdout)
 	}
 
-	c := llm.NewClient(s.cfg.APIKey)
-	c.OnRetry = func(attempt int, err error, delay time.Duration) {
-		fmt.Printf("\r>> API overloaded, retrying in %s (attempt %d)...\n", delay.Round(time.Second), attempt)
+	var base llm.SendFunc
+	switch s.cfg.Provider {
+	case "openai":
+		base = llm.NewOpenAI(s.cfg.APIKey)
+	default:
+		base = llm.NewAnthropic(s.cfg.APIKey)
 	}
-	if err := s.runLoop(ctx, c.Send, contextMsg, toolList, m); err != nil {
+	send := llm.WithRetry(base, 5, func(attempt int, err error, delay time.Duration) {
+		fmt.Printf("\r>> API overloaded, retrying in %s (attempt %d)...\n", delay.Round(time.Second), attempt)
+	})
+	fmt.Printf(">> provider: %s, model: %s\n", s.cfg.Provider, s.cfg.Model)
+	if err := s.runLoop(ctx, send, contextMsg, toolList, m); err != nil {
 		m.Send(fmt.Sprintf("❌ Scout failed: %v", err)) //nolint:errcheck
 		return err
 	}
@@ -125,7 +131,7 @@ loop:
 	for {
 		stopThinking := m.StartThinking()
 		resp, err := send(ctx, llm.Request{
-			Model:     model,
+			Model:     s.cfg.Model,
 			MaxTokens: maxTokens,
 			System:    systemPrompt,
 			Messages:  messages,

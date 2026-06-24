@@ -52,7 +52,7 @@ func (t *Escalate) AfterTool(ctx context.Context, m messenger.Messenger) (bool, 
 	if !t.triggered {
 		return false, nil
 	}
-	m.Send(fmt.Sprintf("[escalated] %s", t.reason)) //nolint:errcheck
+	m.Send(fmt.Sprintf("🚨 Goblin is escalating and stepping away.\n\n<b>Reason:</b> %s\n\nNo changes were made. Goodbye.", t.reason)) //nolint:errcheck
 	params, _ := json.Marshal(map[string]string{"phase": "Escalated", "message": t.reason})
 	_, err := t.status.Execute(ctx, params)
 	return true, err
