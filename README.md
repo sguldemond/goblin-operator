@@ -44,13 +44,22 @@ Pod die
 make -C operator deploy
 ```
 
-**Step 2: give me the API key**
+**Step 2: give me secrets**
+
+Copy `.env.example` to `.env` and fill in your values:
 
 ```bash
-ANTHROPIC_API_KEY=sk-... make -C operator secret
+cp .env.example .env
+# edit .env
 ```
 
-Me forget key if you restart. Run again if you change it.
+Then:
+
+```bash
+make -C operator secret
+```
+
+Me read `.env` automatically. Me forget secrets if you delete them from cluster.
 
 ---
 
@@ -95,10 +104,10 @@ If you give me bot token, me send messages to your phone.
 curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | jq '.result[0].message.chat.id'
 ```
 
-**Step 3: give me secrets**
+**Step 3: give me secrets in .env**
 
 ```bash
-TELEGRAM_BOT_TOKEN=<from-botfather> TELEGRAM_CHAT_ID=<from-api-call> make -C operator horn-secret
+make -C operator horn-secret
 ```
 
 Secret exist → me use Telegram. Secret not exist → find me in `kubectl attach`.

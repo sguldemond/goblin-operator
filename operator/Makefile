@@ -175,16 +175,18 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 	"$(KUBECTL)" apply -f config/rbac/scout_role_binding.yaml
 
 .PHONY: secret
-secret: ## Create the goblin-scout-secrets Secret from ANTHROPIC_API_KEY env var.
+secret: ## Create goblin-scout-secrets from API_KEY (reads ../.env if present).
+	@set -a; [ -f ../.env ] && . ../.env; set +a; \
 	"$(KUBECTL)" create secret generic goblin-scout-secrets \
-		--from-literal=API_KEY="$(ANTHROPIC_API_KEY)" \
+		--from-literal=API_KEY="$$API_KEY" \
 		--dry-run=client -o yaml | "$(KUBECTL)" apply -n goblin -f -
 
 .PHONY: horn-secret
-horn-secret: ## Create the goblin-horn-secrets Secret from TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID env vars.
+horn-secret: ## Create goblin-horn-secrets from TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID (reads ../.env if present).
+	@set -a; [ -f ../.env ] && . ../.env; set +a; \
 	"$(KUBECTL)" create secret generic goblin-horn-secrets \
-		--from-literal=TELEGRAM_BOT_TOKEN="$(TELEGRAM_BOT_TOKEN)" \
-		--from-literal=TELEGRAM_CHAT_ID="$(TELEGRAM_CHAT_ID)" \
+		--from-literal=TELEGRAM_BOT_TOKEN="$$TELEGRAM_BOT_TOKEN" \
+		--from-literal=TELEGRAM_CHAT_ID="$$TELEGRAM_CHAT_ID" \
 		--dry-run=client -o yaml | "$(KUBECTL)" apply -n goblin -f -
 
 .PHONY: undeploy
