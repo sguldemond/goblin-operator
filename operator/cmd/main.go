@@ -179,9 +179,9 @@ func main() {
 	}
 
 	if err := (&controller.RemediationReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		HornImage: os.Getenv("GOBLIN_HORN_IMAGE"),
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		TelegramEnabled: os.Getenv("GOBLIN_TELEGRAM_ENABLED") == "true",
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "remediation")
 		os.Exit(1)

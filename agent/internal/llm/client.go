@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 const defaultBaseURL = "https://api.anthropic.com"
@@ -15,6 +16,7 @@ type Client struct {
 	APIKey  string
 	BaseURL string
 	HTTP    *http.Client
+	OnRetry func(attempt int, err error, delay time.Duration)
 }
 
 func NewClient(apiKey string) *Client {
@@ -25,12 +27,50 @@ func NewClient(apiKey string) *Client {
 	}
 }
 
+// retryableStatus returns true for transient server-side errors worth retrying.
+func retryableStatus(code int) bool {
+	return code == 529 || code == 503 || code == 502 || code == 500
+}
+
 func (c *Client) Send(ctx context.Context, req Request) (Response, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return Response{}, fmt.Errorf("marshaling request: %w", err)
 	}
 
+	const maxAttempts = 5
+	delay := 5 * time.Second
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		resp, err := c.doRequest(ctx, body)
+		if err == nil {
+			return resp, nil
+		}
+
+		apiErr, ok := err.(APIError)
+		if !ok || !retryableStatus(apiErr.StatusCode) {
+			return Response{}, err
+		}
+
+		if attempt == maxAttempts {
+			return Response{}, err
+		}
+
+		if c.OnRetry != nil {
+			c.OnRetry(attempt, err, delay)
+		}
+
+		select {
+		case <-ctx.Done():
+			return Response{}, ctx.Err()
+		case <-time.After(delay):
+		}
+		delay *= 2
+	}
+	panic("unreachable")
+}
+
+func (c *Client) doRequest(ctx context.Context, body []byte) (Response, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		c.BaseURL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {

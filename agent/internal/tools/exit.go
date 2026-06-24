@@ -1,12 +1,10 @@
 package tools
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
-	"strings"
+
+	"github.com/sguldemond/goblin/agent/internal/messenger"
 )
 
 type Exit struct{ triggered bool }
@@ -32,14 +30,16 @@ func (t *Exit) Execute(_ context.Context, _ json.RawMessage) (string, error) {
 
 func (t *Exit) Active() bool { return t.triggered }
 
-func (t *Exit) AfterTurn(_ context.Context, scanner *bufio.Scanner, out io.Writer) ([]string, bool, error) {
-	fmt.Fprint(out, "Goblin wants to exit. OK? [y/n]: ")
-	if !scanner.Scan() {
+func (t *Exit) AfterTurn(ctx context.Context, m messenger.Messenger) ([]string, bool, error) {
+	answer, err := m.Ask(ctx, "Goblin wants to exit. OK?", [][]messenger.Button{
+		{{Text: "👋 Yes", Data: "y"}, {Text: "🚫 No", Data: "n"}},
+	})
+	if err != nil {
 		t.triggered = false
-		return nil, false, scanner.Err()
+		return nil, false, err
 	}
-	if strings.TrimSpace(strings.ToLower(scanner.Text())) == "y" {
-		fmt.Fprintln(out, "Goodbye.")
+	if answer == "y" {
+		m.Send("Goodbye.") //nolint:errcheck
 		return nil, true, nil
 	}
 	t.triggered = false

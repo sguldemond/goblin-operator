@@ -4,7 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
+
+	"github.com/sguldemond/goblin/agent/internal/messenger"
 )
 
 type Escalate struct {
@@ -47,11 +48,11 @@ func (t *Escalate) Execute(_ context.Context, raw json.RawMessage) (string, erro
 	return fmt.Sprintf("Escalated: %s", p.Reason), nil
 }
 
-func (t *Escalate) AfterTool(ctx context.Context, out io.Writer) (bool, error) {
+func (t *Escalate) AfterTool(ctx context.Context, m messenger.Messenger) (bool, error) {
 	if !t.triggered {
 		return false, nil
 	}
-	fmt.Fprintf(out, "\n[escalated] %s\n", t.reason)
+	m.Send(fmt.Sprintf("[escalated] %s", t.reason)) //nolint:errcheck
 	params, _ := json.Marshal(map[string]string{"phase": "Escalated", "message": t.reason})
 	_, err := t.status.Execute(ctx, params)
 	return true, err

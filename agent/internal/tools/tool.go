@@ -1,10 +1,10 @@
 package tools
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
-	"io"
+
+	"github.com/sguldemond/goblin/agent/internal/messenger"
 )
 
 // Tool maps directly to the Claude tool_use API format.
@@ -19,7 +19,7 @@ type Tool interface {
 // AfterToolHook is an optional interface for tools that need to act immediately
 // after Execute() within the tool_use phase. Return stop=true to exit the loop.
 type AfterToolHook interface {
-	AfterTool(ctx context.Context, out io.Writer) (stop bool, err error)
+	AfterTool(ctx context.Context, m messenger.Messenger) (stop bool, err error)
 }
 
 // AfterTurnHook is an optional interface for tools that replace the normal stdin
@@ -27,7 +27,7 @@ type AfterToolHook interface {
 // Returns messages to append and stop=true to exit the loop.
 type AfterTurnHook interface {
 	Active() bool
-	AfterTurn(ctx context.Context, scanner *bufio.Scanner, out io.Writer) (msgs []string, stop bool, err error)
+	AfterTurn(ctx context.Context, m messenger.Messenger) (msgs []string, stop bool, err error)
 }
 
 // ToolResult holds the output of a single tool execution for context assembly.

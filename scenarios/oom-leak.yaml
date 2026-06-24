@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oom-leak
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oom-leak
+  template:
+    metadata:
+      labels:
+        app: oom-leak
+    spec:
+      containers:
+        - name: leaker
+          image: python:3-slim
+          command:
+            - python3
+            - -c
+            - |
+              import time
+              leak = []
+              while True:
+                  leak.append(bytearray(1024 * 1024))
+                  time.sleep(0.05)
+          resources:
+            limits:
+              memory: 32Mi
+            requests:
+              memory: 16Mi

@@ -174,8 +174,6 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 	"$(KUBECTL)" apply -f config/rbac/scout_role.yaml
 	"$(KUBECTL)" apply -f config/rbac/scout_role_binding.yaml
 
-HORN_IMG ?= sguldemond/goblin-horn:latest
-
 .PHONY: secret
 secret: ## Create the goblin-scout-secrets Secret from ANTHROPIC_API_KEY env var.
 	"$(KUBECTL)" create secret generic goblin-scout-secrets \

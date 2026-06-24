@@ -1,14 +1,13 @@
 package scout
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
-	"path/filepath"
+	"strconv"
 	"strings"
+
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/sguldemond/goblin/agent/internal/config"
 	"github.com/sguldemond/goblin/agent/internal/llm"
+	"github.com/sguldemond/goblin/agent/internal/messenger"
 	"github.com/sguldemond/goblin/agent/internal/tools"
 )
 
@@ -72,39 +72,29 @@ func (s *Scout) Run(ctx context.Context) error {
 
 	fmt.Println(">> waking the goblin...")
 
-	in, out := io.Reader(os.Stdin), io.Writer(os.Stdout)
-	if pipeDir := os.Getenv("GOBLIN_PIPE_DIR"); pipeDir != "" {
-		pr, pw, err := openPipes(pipeDir)
+	var m messenger.Messenger
+	if token := os.Getenv("TELEGRAM_BOT_TOKEN"); token != "" {
+		chatID, _ := strconv.ParseInt(os.Getenv("TELEGRAM_CHAT_ID"), 10, 64)
+		tg, err := messenger.NewTelegram(token, chatID)
 		if err != nil {
-			return fmt.Errorf("opening pipes: %w", err)
+			return fmt.Errorf("telegram: %w", err)
 		}
-		defer pr.Close()
-		defer pw.Close()
-		in = pr
-		out = io.MultiWriter(os.Stdout, pw)
-		fmt.Println(">> pipe mode: I/O via goblin-horn sidecar")
+		m = tg
+		fmt.Println(">> telegram mode")
+		tg.Send(fmt.Sprintf("🔔 Goblin scout dispatched: <b>%s</b>", s.cfg.RemediationName)) //nolint:errcheck
+	} else {
+		m = messenger.NewTTY(os.Stdin, os.Stdout)
 	}
 
 	c := llm.NewClient(s.cfg.APIKey)
-	return s.runLoop(ctx, c.Send, contextMsg, toolList, in, out)
-}
-
-// openPipes opens the named pipes created by goblin-horn.
-// Both are opened O_RDWR so the open does not block regardless of which side
-// connects first. Reads from inbox block when empty (desired: mimics stdin).
-// The write end of outbox is held open by the fd itself so goblin-horn's
-// O_RDONLY open can always connect.
-func openPipes(dir string) (inbox, outbox *os.File, err error) {
-	outbox, err = os.OpenFile(filepath.Join(dir, "outbox"), os.O_RDWR, 0)
-	if err != nil {
-		return nil, nil, fmt.Errorf("outbox: %w", err)
+	c.OnRetry = func(attempt int, err error, delay time.Duration) {
+		fmt.Printf("\r>> API overloaded, retrying in %s (attempt %d)...\n", delay.Round(time.Second), attempt)
 	}
-	inbox, err = os.OpenFile(filepath.Join(dir, "inbox"), os.O_RDWR, 0)
-	if err != nil {
-		outbox.Close()
-		return nil, nil, fmt.Errorf("inbox: %w", err)
+	if err := s.runLoop(ctx, c.Send, contextMsg, toolList, m); err != nil {
+		m.Send(fmt.Sprintf("❌ Scout failed: %v", err)) //nolint:errcheck
+		return err
 	}
-	return inbox, outbox, nil
+	return nil
 }
 
 type sendFn func(ctx context.Context, req llm.Request) (llm.Response, error)
@@ -114,8 +104,7 @@ func (s *Scout) runLoop(
 	send sendFn,
 	contextMsg string,
 	toolList []tools.Tool,
-	in io.Reader,
-	out io.Writer,
+	m messenger.Messenger,
 ) error {
 	toolMap := make(map[string]tools.Tool, len(toolList))
 	toolDefs := make([]llm.ToolDef, len(toolList))
@@ -132,11 +121,9 @@ func (s *Scout) runLoop(
 		{Role: "user", Content: []llm.Content{{Type: "text", Text: contextMsg}}},
 	}
 
-	scanner := bufio.NewScanner(in)
-
 loop:
 	for {
-		stopSpinner := startSpinner()
+		stopThinking := m.StartThinking()
 		resp, err := send(ctx, llm.Request{
 			Model:     model,
 			MaxTokens: maxTokens,
@@ -144,7 +131,7 @@ loop:
 			Messages:  messages,
 			Tools:     toolDefs,
 		})
-		stopSpinner()
+		stopThinking()
 		if err != nil {
 			return fmt.Errorf("LLM call failed: %w", err)
 		}
@@ -183,7 +170,7 @@ loop:
 					})
 				}
 				if h, ok := t.(tools.AfterToolHook); ok {
-					if stop, err := h.AfterTool(ctx, out); stop || err != nil {
+					if stop, err := h.AfterTool(ctx, m); stop || err != nil {
 						return err
 					}
 				}
@@ -195,7 +182,7 @@ loop:
 		// Print all text blocks from the assistant response.
 		for _, c := range resp.Content {
 			if c.Type == "text" {
-				fmt.Fprintln(out, c.Text)
+				m.Send(c.Text) //nolint:errcheck
 			}
 		}
 
@@ -206,17 +193,17 @@ loop:
 			if !ok || !h.Active() {
 				continue
 			}
-			msgs, stop, err := h.AfterTurn(ctx, scanner, out)
+			msgs, stop, err := h.AfterTurn(ctx, m)
 			if err != nil {
 				return err
 			}
 			if stop {
 				return nil
 			}
-			for _, m := range msgs {
+			for _, msg := range msgs {
 				messages = append(messages, llm.Message{
 					Role:    "user",
-					Content: []llm.Content{{Type: "text", Text: m}},
+					Content: []llm.Content{{Type: "text", Text: msg}},
 				})
 			}
 			turnHandled = true
@@ -226,20 +213,11 @@ loop:
 			continue
 		}
 
-		// Normal stdin prompt.
-		var line string
-		for {
-			fmt.Fprint(out, "\n> ")
-			if !scanner.Scan() {
-				return scanner.Err()
-			}
-			line = strings.TrimSpace(scanner.Text())
-			if line != "" {
-				break
-			}
+		// Normal prompt — exit/bye shortcut bypasses the LLM.
+		line, err := m.Ask(ctx, "", nil)
+		if err != nil {
+			return err
 		}
-
-		// Exit keywords bypass the LLM — trigger the exit tool directly.
 		if lower := strings.ToLower(line); lower == "exit" || lower == "bye" {
 			for _, t := range toolList {
 				if t.Name() != "exit" {
@@ -247,17 +225,17 @@ loop:
 				}
 				t.Execute(ctx, nil) //nolint:errcheck
 				h := t.(tools.AfterTurnHook)
-				msgs, stop, err := h.AfterTurn(ctx, scanner, out)
+				msgs, stop, err := h.AfterTurn(ctx, m)
 				if err != nil {
 					return err
 				}
 				if stop {
 					return nil
 				}
-				for _, m := range msgs {
+				for _, msg := range msgs {
 					messages = append(messages, llm.Message{
 						Role:    "user",
-						Content: []llm.Content{{Type: "text", Text: m}},
+						Content: []llm.Content{{Type: "text", Text: msg}},
 					})
 				}
 				continue loop
@@ -338,32 +316,4 @@ func stringField(m map[string]any, key string) string {
 	}
 	v, _ := m[key].(string)
 	return v
-}
-
-// startSpinner shows an in-place "thinking..." indicator on stdout.
-// Uses \r to overwrite so multiple LLM round-trips don't stack new lines.
-// Writes directly to os.Stdout to stay out of the goblin-horn pipe.
-func startSpinner() func() {
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-		n := 0
-		for {
-			select {
-			case <-stop:
-				fmt.Fprint(os.Stdout, "\r                \r")
-				return
-			case <-ticker.C:
-				n++
-				fmt.Fprintf(os.Stdout, "\r>> thinking%-3s", strings.Repeat(".", n%4))
-			}
-		}
-	}()
-	return func() {
-		close(stop)
-		<-done
-	}
 }

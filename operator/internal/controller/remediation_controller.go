@@ -38,8 +38,8 @@ const noAutoRemediateAnnotation = "goblinoperator.io/no-auto-remediate"
 // RemediationReconciler reconciles a Remediation object
 type RemediationReconciler struct {
 	client.Client
-	Scheme    *runtime.Scheme
-	HornImage string // if non-empty, attach goblin-horn sidecar to scout Jobs
+	Scheme          *runtime.Scheme
+	TelegramEnabled bool // if true, inject Telegram credentials into scout Jobs
 }
 
 // +kubebuilder:rbac:groups=ops.goblinoperator.io,resources=remediations,verbs=get;list;watch;create;update;patch;delete
@@ -144,7 +144,6 @@ func (r *RemediationReconciler) findJob(ctx context.Context, rem *opsv1alpha1.Re
 
 func (r *RemediationReconciler) createScoutJob(ctx context.Context, rem *opsv1alpha1.Remediation) error {
 	ttl := int32(300)
-	telegramMode := r.HornImage != ""
 
 	scoutEnv := []corev1.EnvVar{
 		{Name: "REMEDIATION_NAME", Value: rem.Name},
@@ -159,60 +158,40 @@ func (r *RemediationReconciler) createScoutJob(ctx context.Context, rem *opsv1al
 			},
 		},
 	}
-	if telegramMode {
-		scoutEnv = append(scoutEnv, corev1.EnvVar{Name: "GOBLIN_PIPE_DIR", Value: "/shared"})
-	}
-
-	scoutContainer := corev1.Container{
-		Name:            "scout",
-		Image:           "sguldemond/goblin-scout:latest",
-		ImagePullPolicy: corev1.PullAlways,
-		Stdin:           !telegramMode,
-		TTY:             !telegramMode,
-		Env:             scoutEnv,
+	if r.TelegramEnabled {
+		scoutEnv = append(scoutEnv,
+			corev1.EnvVar{
+				Name: "TELEGRAM_BOT_TOKEN",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "goblin-horn-secrets"},
+						Key:                  "TELEGRAM_BOT_TOKEN",
+					},
+				},
+			},
+			corev1.EnvVar{
+				Name: "TELEGRAM_CHAT_ID",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "goblin-horn-secrets"},
+						Key:                  "TELEGRAM_CHAT_ID",
+					},
+				},
+			},
+		)
 	}
 
 	podSpec := corev1.PodSpec{
 		ServiceAccountName: "goblin-scout",
 		RestartPolicy:      corev1.RestartPolicyNever,
-		Containers:         []corev1.Container{scoutContainer},
-	}
-
-	if telegramMode {
-		scoutContainer.VolumeMounts = []corev1.VolumeMount{{Name: "shared", MountPath: "/shared"}}
-		podSpec.Containers[0] = scoutContainer
-		podSpec.Containers = append(podSpec.Containers, corev1.Container{
-			Name:            "horn",
-			Image:           r.HornImage,
+		Containers: []corev1.Container{{
+			Name:            "scout",
+			Image:           "sguldemond/goblin-scout:latest",
 			ImagePullPolicy: corev1.PullAlways,
-			Env: []corev1.EnvVar{
-				{Name: "REMEDIATION_NAME", Value: rem.Name},
-				{Name: "PIPE_DIR", Value: "/shared"},
-				{
-					Name: "TELEGRAM_BOT_TOKEN",
-					ValueFrom: &corev1.EnvVarSource{
-						SecretKeyRef: &corev1.SecretKeySelector{
-							LocalObjectReference: corev1.LocalObjectReference{Name: "goblin-horn-secrets"},
-							Key:                  "TELEGRAM_BOT_TOKEN",
-						},
-					},
-				},
-				{
-					Name: "TELEGRAM_CHAT_ID",
-					ValueFrom: &corev1.EnvVarSource{
-						SecretKeyRef: &corev1.SecretKeySelector{
-							LocalObjectReference: corev1.LocalObjectReference{Name: "goblin-horn-secrets"},
-							Key:                  "TELEGRAM_CHAT_ID",
-						},
-					},
-				},
-			},
-			VolumeMounts: []corev1.VolumeMount{{Name: "shared", MountPath: "/shared"}},
-		})
-		podSpec.Volumes = []corev1.Volume{{
-			Name:         "shared",
-			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
-		}}
+			Stdin:           true,
+			TTY:             true,
+			Env:             scoutEnv,
+		}},
 	}
 
 	job := &batchv1.Job{

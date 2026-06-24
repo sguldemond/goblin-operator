@@ -1,11 +1,9 @@
 package tools
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -13,6 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/sguldemond/goblin/agent/internal/messenger"
 )
 
 type PatchDeployment struct {
@@ -100,19 +100,20 @@ func (t *PatchDeployment) Execute(ctx context.Context, raw json.RawMessage) (str
 
 func (t *PatchDeployment) Active() bool { return t.pending != nil }
 
-func (t *PatchDeployment) AfterTurn(ctx context.Context, scanner *bufio.Scanner, out io.Writer) ([]string, bool, error) {
+func (t *PatchDeployment) AfterTurn(ctx context.Context, m messenger.Messenger) ([]string, bool, error) {
 	p := t.pending
 
-	fmt.Fprintf(out, "\nDiff: %s/%s\n", p.namespace, p.deployName)
-	fmt.Fprintln(out, p.diff)
-	fmt.Fprint(out, "\nApply? [y/n]: ")
+	m.Send(fmt.Sprintf("Diff: %s/%s\n%s", p.namespace, p.deployName, p.diff)) //nolint:errcheck
 
-	if !scanner.Scan() {
+	answer, err := m.Ask(ctx, "Apply this patch?", [][]messenger.Button{
+		{{Text: "✅ Apply", Data: "y"}, {Text: "❌ Reject", Data: "n"}},
+	})
+	if err != nil {
 		t.pending = nil
-		return nil, false, scanner.Err()
+		return nil, false, err
 	}
 
-	if strings.TrimSpace(strings.ToLower(scanner.Text())) == "y" {
+	if strings.ToLower(strings.TrimSpace(answer)) == "y" {
 		_, err := t.client.AppsV1().Deployments(p.namespace).Patch(
 			ctx, p.deployName, types.StrategicMergePatchType, p.patch, metav1.PatchOptions{},
 		)
@@ -120,16 +121,12 @@ func (t *PatchDeployment) AfterTurn(ctx context.Context, scanner *bufio.Scanner,
 		if err != nil {
 			return nil, false, fmt.Errorf("applying patch: %w", err)
 		}
-		fmt.Fprintln(out, "Patch applied.")
-		verification := t.verifyRollout(ctx, p.namespace, p.deployName, out)
+		m.Send("Patch applied.") //nolint:errcheck
+		verification := t.verifyRollout(ctx, p.namespace, p.deployName, m)
 		return []string{"Patch applied. " + verification}, false, nil
 	}
 
-	fmt.Fprint(out, "Rejection reason (optional): ")
-	reason := ""
-	if scanner.Scan() {
-		reason = strings.TrimSpace(scanner.Text())
-	}
+	reason, _ := m.Ask(ctx, "Rejection reason (optional, or leave empty):", nil)
 	t.pending = nil
 
 	msg := "Human rejected the patch."
@@ -140,7 +137,7 @@ func (t *PatchDeployment) AfterTurn(ctx context.Context, scanner *bufio.Scanner,
 }
 
 // verifyRollout polls the deployment's pods until all are ready or timeout.
-func (t *PatchDeployment) verifyRollout(ctx context.Context, namespace, deployName string, out io.Writer) string {
+func (t *PatchDeployment) verifyRollout(ctx context.Context, namespace, deployName string, m messenger.Messenger) string {
 	deploy, err := t.client.AppsV1().Deployments(namespace).Get(ctx, deployName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Sprintf("Could not verify rollout: %v", err)
@@ -152,7 +149,7 @@ func (t *PatchDeployment) verifyRollout(ctx context.Context, namespace, deployNa
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	fmt.Fprintln(out, "Verifying rollout (timeout 2m)...")
+	m.Send("Verifying rollout (timeout 2m)...") //nolint:errcheck
 	for {
 		pods, err := t.client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
 		if err == nil && len(pods.Items) > 0 {
@@ -164,7 +161,7 @@ func (t *PatchDeployment) verifyRollout(ctx context.Context, namespace, deployNa
 					}
 				}
 			}
-			fmt.Fprintf(out, "  %d/%d pods ready\n", ready, len(pods.Items))
+			m.Send(fmt.Sprintf("  %d/%d pods ready", ready, len(pods.Items))) //nolint:errcheck
 			if ready == len(pods.Items) {
 				remStatus := "Applied"
 				remNote := ""
@@ -179,8 +176,8 @@ func (t *PatchDeployment) verifyRollout(ctx context.Context, namespace, deployNa
 				for i, p := range pods.Items {
 					names[i] = p.Name
 				}
-				fmt.Fprintf(out, "Pod status: %d/%d ready — %s\n", ready, len(pods.Items), strings.Join(names, ", "))
-				fmt.Fprintf(out, "Remediation status: %s%s\n", remStatus, remNote)
+				m.Send(fmt.Sprintf("Pod status: %d/%d ready — %s\nRemediation status: %s%s", //nolint:errcheck
+					ready, len(pods.Items), strings.Join(names, ", "), remStatus, remNote))
 				return fmt.Sprintf("Pod status: %d/%d ready. Remediation status: %s.", ready, len(pods.Items), remStatus)
 			}
 		}
@@ -230,7 +227,8 @@ func lcsLineDiff(before, after string, ctx int) string {
 		switch {
 		case i > 0 && j > 0 && a[i-1] == b[j-1]:
 			edits = append(edits, edit{'=', a[i-1]})
-			i--; j--
+			i--
+			j--
 		case j > 0 && (i == 0 || dp[i][j-1] >= dp[i-1][j]):
 			edits = append(edits, edit{'+', b[j-1]})
 			j--
