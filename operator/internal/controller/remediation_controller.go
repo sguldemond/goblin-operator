@@ -38,8 +38,7 @@ const noAutoRemediateAnnotation = "goblinoperator.io/no-auto-remediate"
 // RemediationReconciler reconciles a Remediation object
 type RemediationReconciler struct {
 	client.Client
-	Scheme          *runtime.Scheme
-	TelegramEnabled bool // if true, inject Telegram credentials into scout Jobs
+	Scheme *runtime.Scheme
 }
 
 // +kubebuilder:rbac:groups=ops.goblinoperator.io,resources=remediations,verbs=get;list;watch;create;update;patch;delete
@@ -158,28 +157,29 @@ func (r *RemediationReconciler) createScoutJob(ctx context.Context, rem *opsv1al
 			},
 		},
 	}
-	if r.TelegramEnabled {
-		scoutEnv = append(scoutEnv,
-			corev1.EnvVar{
-				Name: "TELEGRAM_BOT_TOKEN",
-				ValueFrom: &corev1.EnvVarSource{
-					SecretKeyRef: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{Name: "goblin-horn-secrets"},
-						Key:                  "TELEGRAM_BOT_TOKEN",
-					},
+	optional := true
+	scoutEnv = append(scoutEnv,
+		corev1.EnvVar{
+			Name: "TELEGRAM_BOT_TOKEN",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "goblin-horn-secrets"},
+					Key:                  "TELEGRAM_BOT_TOKEN",
+					Optional:             &optional,
 				},
 			},
-			corev1.EnvVar{
-				Name: "TELEGRAM_CHAT_ID",
-				ValueFrom: &corev1.EnvVarSource{
-					SecretKeyRef: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{Name: "goblin-horn-secrets"},
-						Key:                  "TELEGRAM_CHAT_ID",
-					},
+		},
+		corev1.EnvVar{
+			Name: "TELEGRAM_CHAT_ID",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "goblin-horn-secrets"},
+					Key:                  "TELEGRAM_CHAT_ID",
+					Optional:             &optional,
 				},
 			},
-		)
-	}
+		},
+	)
 
 	podSpec := corev1.PodSpec{
 		ServiceAccountName: "goblin-scout",

@@ -83,6 +83,28 @@ kubectl attach -it -n goblin $(kubectl get pod -n goblin -l "goblinoperator.io/r
 
 ---
 
+## I also have golbin horn, I honk at your Telegram
+
+If you give me bot token, me send messages to your phone.
+
+**Step 1: make bot with Telegram's BotFather (`/newbot`), get token**
+
+**Step 2: get your chat ID**
+
+```bash
+curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | jq '.result[0].message.chat.id'
+```
+
+**Step 3: give me secrets**
+
+```bash
+TELEGRAM_BOT_TOKEN=<from-botfather> TELEGRAM_CHAT_ID=<from-api-call> make -C operator horn-secret
+```
+
+Secret exist → me use Telegram. Secret not exist → find me in `kubectl attach`.
+
+---
+
 ## Where me live
 
 ```
