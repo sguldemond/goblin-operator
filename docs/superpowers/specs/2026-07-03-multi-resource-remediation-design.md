@@ -362,4 +362,4 @@ acceptance test harness — keep growing it in lockstep).
 - Auto-apply without human approval (`approval: never`) — API reserved, not implemented.
 - Node drain, PV surgery, Secret creation/patching — always escalate.
 - A YAML/CEL expression language for detection in v1 — named builtins first.
-- Cross-resource correlation (e.g. "these 5 incidents share one root cause") — future goblin-chief.
+- Cross-resource correlation (e.g. "these 5 incidents share one root cause") — designed separately in `2026-07-03-investigation-absorption-design.md`.
