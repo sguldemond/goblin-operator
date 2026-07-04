@@ -1,6 +1,11 @@
 # Multi-Resource Remediation — Exploration & Design Spec
 _2026-07-03_
 
+> **Refined by `2026-07-04-incident-case-design.md`:** kinds renamed
+> (Remediation → Incident, RemediationPolicy → IncidentPolicy) and the
+> scout's lifetime redesigned there. The detection architecture, issue
+> catalog, tools, and permission tiers below remain current.
+
 ## What this is
 
 An exploration of how to extend the goblin beyond pod-only issues: which

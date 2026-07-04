@@ -1,6 +1,13 @@
 # Investigations — Multi-Incident Absorption Design Spec
 _2026-07-03_
 
+> **Refined by `2026-07-04-incident-case-design.md`:** Investigation is
+> renamed to Case, Remediation to Incident; the bidirectional
+> incident-listing in §1 is replaced by label-based child lookup; and the
+> Job-per-Investigation runner is superseded by a standing-agent
+> recommendation. The correlation heuristics (§2), absorption mechanics
+> (§3), and runtime permission escalation (§4) remain current.
+
 ## What this is
 
 When several issues fire at once they might or might not share a root cause —
