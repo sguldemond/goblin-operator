@@ -39,6 +39,33 @@ scout in the cluster and chat, Claude Code style.
 
 ---
 
+## 2026-07-04 — Per-target status watchers (goroutine per tracked resource)
+
+For something like a pod in an error status: start a tiny goroutine that
+keeps watching that resource's status and informs the scout when it changes.
+
+- **What it gives the scout**: live eyes on its targets. Today the scout only
+  sees a snapshot when it happens to call `getResource`; a watcher turns
+  "state changed under you" into a message — pod recovered on its own (close
+  the incident, no fix needed), error escalated to a different state
+  (CrashLoopBackOff → ImagePullBackOff), or recurrence right after a fix.
+- **Mechanism**: prefer a k8s watch (`dynCli.Resource(gvr).Watch` with a
+  fieldSelector on the name) over polling — near-zero cost, one goroutine per
+  tracked target. Fall back to a slow poll ticker only if watch perms are an
+  issue. Emit compact status-diff events ("what changed"), not full objects.
+- **Delivery reuses the absorption path**: watcher pushes onto a channel; the
+  loop drains it at turn boundaries and injects a user message, exactly like
+  newly absorbed incidents. In standing-scout mode a status change can also
+  *wake* an idle case thread.
+- **Lifecycle**: watcher starts when an incident is absorbed into a case,
+  stops when the incident resolves/releases or the case closes. Cap watcher
+  count per case (same spirit as `maxIncidents`).
+- **Bonus**: this subsumes the hardcoded 2-minute `verifyRollout` polling in
+  `patch_deployment.go` — verification becomes "watch the targets until
+  stable or timeout", uniform across all fix tools.
+
+---
+
 ## Direction snapshot (2026-07-04)
 
 Where the design has landed, per the specs in `specs/`:
