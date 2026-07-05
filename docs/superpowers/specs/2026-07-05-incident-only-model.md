@@ -128,6 +128,51 @@ Details that matter:
 - Bindings carry `goblinoperator.io/managed-by` + tier labels; grants/revokes
   emit Events on the affected incidents.
 
+## Context and memory model — a standing pod, not a standing conversation
+
+The long-lived scout must not accumulate a long-lived message history. The
+old Job model's hidden virtue was a narrow context window — one incident,
+nothing else. That virtue was never really about ephemeral *pods*; it was
+about ephemeral *conversations*. Separate the two lifetimes and keep the
+narrow window:
+
+**1. A thread per correlation group.** The scout keeps an independent message
+list per open correlation-id (chat sessions are threads too). A new incident
+joins its group's thread or starts a fresh one — so even with five unrelated
+incidents open, each conversation is as narrow as a Job's was. Absorption
+only ever merges context for incidents judged *related*. (Side benefit:
+stable per-thread prefixes are exactly what LLM prompt caching wants.)
+
+**2. Settle → summarize → erase.** When a group's incidents are resolved and
+a linger window passes (`lingerSeconds`, reuse of the cooldown spirit), the
+thread's messages are **deleted**, not archived. Before deletion the scout
+flushes the durable artifacts to the Incident CRs — `status.rootCause`,
+`status.diagnosisSummary`, and the `history` entries with applied
+patches/diffs (all already in the design). This is deliberately **the same
+mechanism as crash recovery**: a pod restart is just an involuntary thread
+teardown, and the summary makes both safe. One code path, two failure modes
+covered.
+
+**3. Recall is a query, not retention.** The Incident CRs *are* the memory
+database, and the existing labels (`target-uid`, correlation-id, trigger) are
+its indexes. The agent gets history through tools, on demand:
+
+- `listIncidents` — filter by target / namespace / trigger / time ("has this
+  deployment OOMed before?"). Thin sugar over `getResource` on the Incident
+  GVK with label selectors, which already works today.
+- `getIncident` — the full record: root cause, what was changed, the diffs.
+
+**4. Automatic recall at claim time.** When claiming a new incident, context
+gathering additionally runs one cheap label query for prior incidents on the
+same target/owner and injects only their *summaries*: "this deployment had 2
+prior OOMKilled incidents; last fix raised memory 256→512Mi." The standing
+scout's recurring-problem awareness — its main advantage — survives without
+retaining a single message. Memory lives in records, not transcripts.
+
+**5. In-thread compaction as a backstop.** If one gnarly case exceeds a token
+budget mid-flight, summarize its older turns into a single message and
+continue. Secondary knob; teardown (2) is the primary mechanism.
+
 ## What this simplifies (phasing deltas)
 
 - Phase 6 shrinks to: rename Remediation → Incident, phase flow above,
