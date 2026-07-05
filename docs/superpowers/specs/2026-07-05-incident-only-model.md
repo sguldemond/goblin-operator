@@ -91,11 +91,42 @@ without a Case around them).
 
 ### Tier bindings without Case
 
-Bind-on-claim, release-by-refcount: claiming an incident whose policy tier
-isn't bound → operator (watching `claimedBy`/phase) binds the tier role to
-the scout's SA; when the last open incident needing a tier closes, unbind.
-Audit via Events on the incident and `status.grantedTier`. The `bind`-verb
-guardrail is unchanged.
+The **IncidentReconciler updates the agent's RoleBindings as derived state**
+— level-triggered reconciliation, not imperative bind/unbind calls:
+
+```
+desired bindings = union over all Incidents in {Analyzing, AwaitingApproval, Applying}
+                   of (incident.spec.tier, incident.namespace)
+```
+
+On every Incident event the reconciler computes that set and syncs reality to
+it: missing binding → create, no longer needed → delete. Idempotent,
+self-healing (a manually deleted binding comes back on the next reconcile;
+a stale one from a crashed run is garbage-collected), and refcounting falls
+out for free — the binding exists exactly as long as at least one open
+incident needs it.
+
+Details that matter:
+
+- **The operator binds, never the scout.** The scout's own RBAC contains no
+  RoleBinding write access, so it cannot grant itself anything; the operator
+  holds the `bind` verb scoped to the `goblin-tier-*` ClusterRoles only
+  (guardrail unchanged).
+- **Bindings are namespace-scoped where the tier allows.** Because the
+  desired set is (tier, namespace) pairs, `workload-editor` for an incident
+  in `team-a` is a namespaced RoleBinding *in* `team-a` — the scout can patch
+  deployments only in namespaces that currently have open incidents, not
+  cluster-wide. Only inherently cluster-scoped tiers (`node-operator`) use a
+  ClusterRoleBinding.
+- **Binding keys off the phase transition, not creation**: incidents in
+  `Detected` grant nothing — while the scout is down, no permissions exist.
+  Claiming (`Analyzing`) is what brings the tier up.
+- **Claim-to-bind race**: the scout may claim and immediately attempt a read
+  the tier gates before the binding lands. Tools already surface RBAC
+  denials as tool errors the LLM can retry; optionally the scout waits for
+  `status.grantedTier` (stamped by the reconciler) before proposing writes.
+- Bindings carry `goblinoperator.io/managed-by` + tier labels; grants/revokes
+  emit Events on the affected incidents.
 
 ## What this simplifies (phasing deltas)
 
