@@ -70,10 +70,12 @@ keeps watching that resource's status and informs the scout when it changes.
 
 Where the design has landed, per the specs in `specs/`:
 
-- k8s-native object model: IncidentPolicy → Incident (fact) → Case (process),
-  dynamic incident types instead of two hardcoded triggers.
-- Single standing scout absorbing incidents into developing cases, with
-  cluster memory.
+- k8s-native object model: IncidentPolicy → Incident (single CRD carrying
+  the full status flow; Case dropped 2026-07-05), dynamic incident types
+  instead of two hardcoded triggers.
+- Single standing scout (Deployment, replicas=1) fed by an informer on
+  Incidents — list-then-watch doubles as crash recovery; grouping via
+  correlation-id label.
 - Dynamic but strict RBAC: read-only at rest, case-scoped time-boxed tier
   bindings, `bind`-verb guardrail, audit on the Case.
 - Code-enforced approval gate on every write, regardless of who's asking.

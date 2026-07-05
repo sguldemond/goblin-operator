@@ -1,6 +1,12 @@
 # Incidents & Cases — Naming, Relationship, and the Standing Scout
 _2026-07-04_
 
+> **Revised by `2026-07-05-incident-only-model.md`:** the Case CRD is
+> dropped — Incident alone carries the status flow, the scout runs as a
+> single-replica Deployment fed by an informer on Incidents, and grouping
+> becomes a correlation-id label. The standing-scout recommendation (§3)
+> stands; §1–2's two-CRD model does not.
+
 ## What this is
 
 A refinement of the two 2026-07-03 specs, addressing three problems:
