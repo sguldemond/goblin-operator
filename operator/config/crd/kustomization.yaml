@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/ops.goblinoperator.io_incidents.yaml
+- bases/ops.goblinoperator.io_incidentpolicies.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:
