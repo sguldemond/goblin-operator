@@ -25,6 +25,23 @@ rules:
 - apiGroups:
   - ops.goblinoperator.io
   resources:
+  - incidentpolicies
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ops.goblinoperator.io
+  resources:
+  - incidentpolicies/status
+  - incidents/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ops.goblinoperator.io
+  resources:
   - incidents
   verbs:
   - create
@@ -39,12 +56,4 @@ rules:
   resources:
   - incidents/finalizers
   verbs:
-  - update
-- apiGroups:
-  - ops.goblinoperator.io
-  resources:
-  - incidents/status
-  verbs:
-  - get
-  - patch
   - update

@@ -37,6 +37,7 @@ import (
 
 	opsv1alpha1 "github.com/sguldemond/goblin/api/v1alpha1"
 	"github.com/sguldemond/goblin/internal/controller"
+	"github.com/sguldemond/goblin/internal/detection"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -192,6 +193,16 @@ func main() {
 		RemediationNamespace: "goblin",
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "pod-failure")
+		os.Exit(1)
+	}
+
+	registry := detection.NewRegistry()
+
+	if err := (&controller.PolicyReconciler{
+		Client:   mgr.GetClient(),
+		Registry: registry,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "incidentpolicy")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
