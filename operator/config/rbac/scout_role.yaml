@@ -22,5 +22,5 @@ rules:
     resources: ["nodes", "resourcequotas", "namespaces"]
     verbs: ["get", "list"]
   - apiGroups: ["ops.goblinoperator.io"]
-    resources: ["remediations", "remediations/status"]
+    resources: ["incidents", "incidents/status"]
     verbs: ["get", "patch"]
