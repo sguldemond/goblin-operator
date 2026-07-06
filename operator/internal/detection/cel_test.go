@@ -9,7 +9,7 @@ func TestCompileRejectsGarbage(t *testing.T) {
 }
 
 func TestEvalOOMKilled(t *testing.T) {
-	expr := `has(object.status.containerStatuses) && object.status.containerStatuses.exists(c, has(c.lastState.terminated) && c.lastState.terminated.reason == 'OOMKilled')`
+	expr := `has(object.status.containerStatuses) && object.status.containerStatuses.exists(c, has(c.lastState) && has(c.lastState.terminated) && c.lastState.terminated.reason == 'OOMKilled')`
 	m, err := Compile(expr)
 	if err != nil {
 		t.Fatalf("compile: %v", err)
@@ -24,8 +24,8 @@ func TestEvalOOMKilled(t *testing.T) {
 	healthy := map[string]any{"status": map[string]any{"containerStatuses": []any{
 		map[string]any{"ready": true},
 	}}}
-	if got, _ := m.Eval(healthy); got {
-		t.Fatal("expected no match for healthy pod")
+	if got, err := m.Eval(healthy); err != nil || got {
+		t.Fatalf("expected clean no-match for healthy pod, got match=%v err=%v", got, err)
 	}
 }
 
