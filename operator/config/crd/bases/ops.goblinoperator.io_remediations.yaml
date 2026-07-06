@@ -21,9 +21,6 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.attempts
-      name: Attempts
-      type: integer
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -47,9 +44,6 @@ spec:
             type: object
           spec:
             properties:
-              maxAttempts:
-                default: 2
-                type: integer
               podRef:
                 description: ObjectReference contains enough information to let you
                   inspect or modify the referred object.
@@ -105,58 +99,6 @@ spec:
             type: object
           status:
             properties:
-              attempts:
-                type: integer
-              conversation:
-                items:
-                  properties:
-                    from:
-                      type: string
-                    text:
-                      type: string
-                    timestamp:
-                      format: date-time
-                      type: string
-                  required:
-                  - from
-                  - text
-                  - timestamp
-                  type: object
-                type: array
-              history:
-                items:
-                  properties:
-                    action:
-                      properties:
-                        action:
-                          enum:
-                          - patchMemoryLimit
-                          - restartPod
-                          - scaleReplicas
-                          - flagForHuman
-                          type: string
-                        params:
-                          additionalProperties:
-                            type: string
-                          type: object
-                        reasoning:
-                          type: string
-                      required:
-                      - action
-                      type: object
-                    appliedAt:
-                      format: date-time
-                      type: string
-                    outcome:
-                      description: '"stable" | "recurred" — written by the deterministic
-                        validate step only'
-                      type: string
-                  required:
-                  - action
-                  - appliedAt
-                  - outcome
-                  type: object
-                type: array
               message:
                 type: string
               phase:
@@ -164,30 +106,11 @@ spec:
                 - Detected
                 - Assessing
                 - AwaitingApproval
-                - Validating
                 - Applied
                 - Rejected
                 - Escalated
                 - HandedOff
                 type: string
-              proposedAction:
-                properties:
-                  action:
-                    enum:
-                    - patchMemoryLimit
-                    - restartPod
-                    - scaleReplicas
-                    - flagForHuman
-                    type: string
-                  params:
-                    additionalProperties:
-                      type: string
-                    type: object
-                  reasoning:
-                    type: string
-                required:
-                - action
-                type: object
             type: object
         required:
         - spec

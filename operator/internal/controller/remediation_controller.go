@@ -35,6 +35,15 @@ import (
 const remediationJobLabel = "goblinoperator.io/remediation"
 const noAutoRemediateAnnotation = "goblinoperator.io/no-auto-remediate"
 
+// preStartFailureReasons are container waiting reasons that mean the scout pod
+// can never start without intervention — no point waiting for the Job to finish.
+var preStartFailureReasons = map[string]bool{
+	"CreateContainerConfigError": true,
+	"ImagePullBackOff":           true,
+	"ErrImagePull":               true,
+	"InvalidImageName":           true,
+}
+
 // RemediationReconciler reconciles a Remediation object
 type RemediationReconciler struct {
 	client.Client
@@ -147,11 +156,8 @@ func (r *RemediationReconciler) scoutPodFailureMessage(ctx context.Context, name
 	}
 	for _, pod := range pods.Items {
 		for _, cs := range pod.Status.ContainerStatuses {
-			if cs.State.Waiting != nil {
-				switch cs.State.Waiting.Reason {
-				case "CreateContainerConfigError", "ImagePullBackOff", "ErrImagePull", "InvalidImageName":
-					return cs.State.Waiting.Message
-				}
+			if cs.State.Waiting != nil && preStartFailureReasons[cs.State.Waiting.Reason] {
+				return cs.State.Waiting.Message
 			}
 		}
 	}

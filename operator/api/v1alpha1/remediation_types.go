@@ -22,28 +22,17 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// +kubebuilder:validation:Enum=Detected;Assessing;AwaitingApproval;Validating;Applied;Rejected;Escalated;HandedOff
+// +kubebuilder:validation:Enum=Detected;Assessing;AwaitingApproval;Applied;Rejected;Escalated;HandedOff
 type RemediationPhase string
 
 const (
 	PhaseDetected         RemediationPhase = "Detected"
 	PhaseAssessing        RemediationPhase = "Assessing"
 	PhaseAwaitingApproval RemediationPhase = "AwaitingApproval"
-	PhaseValidating       RemediationPhase = "Validating"
 	PhaseApplied          RemediationPhase = "Applied"
 	PhaseRejected         RemediationPhase = "Rejected"
 	PhaseEscalated        RemediationPhase = "Escalated"
 	PhaseHandedOff        RemediationPhase = "HandedOff"
-)
-
-// +kubebuilder:validation:Enum=patchMemoryLimit;restartPod;scaleReplicas;flagForHuman
-type ActionType string
-
-const (
-	ActionPatchMemoryLimit ActionType = "patchMemoryLimit"
-	ActionRestartPod       ActionType = "restartPod"
-	ActionScaleReplicas    ActionType = "scaleReplicas"
-	ActionFlagForHuman     ActionType = "flagForHuman"
 )
 
 type RemediationSpec struct {
@@ -51,44 +40,17 @@ type RemediationSpec struct {
 
 	// +kubebuilder:validation:Enum=OOMKilled;Unschedulable
 	Trigger string `json:"trigger"`
-
-	// +kubebuilder:default=2
-	MaxAttempts int `json:"maxAttempts,omitempty"`
-}
-
-type ProposedAction struct {
-	Action    ActionType        `json:"action"`
-	Params    map[string]string `json:"params,omitempty"`
-	Reasoning string            `json:"reasoning,omitempty"`
-}
-
-type AttemptRecord struct {
-	Action    ProposedAction `json:"action"`
-	AppliedAt metav1.Time    `json:"appliedAt"`
-	// "stable" | "recurred" — written by the deterministic validate step only
-	Outcome string `json:"outcome"`
-}
-
-type ConversationTurn struct {
-	From      string      `json:"from"` // "agent" | "human"
-	Text      string      `json:"text"`
-	Timestamp metav1.Time `json:"timestamp"`
 }
 
 type RemediationStatus struct {
-	Phase          RemediationPhase   `json:"phase,omitempty"`
-	ProposedAction *ProposedAction    `json:"proposedAction,omitempty"`
-	Attempts       int                `json:"attempts,omitempty"`
-	History        []AttemptRecord    `json:"history,omitempty"`
-	Conversation   []ConversationTurn `json:"conversation,omitempty"`
-	Message        string             `json:"message,omitempty"`
+	Phase   RemediationPhase `json:"phase,omitempty"`
+	Message string           `json:"message,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Trigger",type=string,JSONPath=`.spec.trigger`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="Attempts",type=integer,JSONPath=`.status.attempts`
 type Remediation struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

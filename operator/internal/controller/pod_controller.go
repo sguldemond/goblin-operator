@@ -91,8 +91,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 				Namespace:  pod.Namespace,
 				UID:        pod.UID,
 			},
-			Trigger:     trigger,
-			MaxAttempts: 2,
+			Trigger: trigger,
 		},
 	}
 

@@ -10,4 +10,3 @@ spec:
     name: sample-pod
     namespace: default
   trigger: OOMKilled
-  maxAttempts: 2
