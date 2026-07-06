@@ -25,7 +25,7 @@ rules:
 - apiGroups:
   - ops.goblinoperator.io
   resources:
-  - remediations
+  - incidents
   verbs:
   - create
   - delete
@@ -37,13 +37,13 @@ rules:
 - apiGroups:
   - ops.goblinoperator.io
   resources:
-  - remediations/finalizers
+  - incidents/finalizers
   verbs:
   - update
 - apiGroups:
   - ops.goblinoperator.io
   resources:
-  - remediations/status
+  - incidents/status
   verbs:
   - get
   - patch

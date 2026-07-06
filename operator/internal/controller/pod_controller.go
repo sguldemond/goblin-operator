@@ -34,9 +34,9 @@ import (
 	opsv1alpha1 "github.com/sguldemond/goblin/api/v1alpha1"
 )
 
-const podUIDLabel = "goblinoperator.io/pod-uid"
+const targetUIDLabel = "goblinoperator.io/target-uid"
 
-// PodReconciler watches Pods and creates Remediation CRs for failed pods.
+// PodReconciler watches Pods and creates Incident CRs for failed pods.
 type PodReconciler struct {
 	client.Client
 	Scheme               *runtime.Scheme
@@ -44,8 +44,8 @@ type PodReconciler struct {
 }
 
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
-// +kubebuilder:rbac:groups=ops.goblinoperator.io,resources=remediations,verbs=get;list;watch;create
-// +kubebuilder:rbac:groups=ops.goblinoperator.io,resources=remediations/status,verbs=update
+// +kubebuilder:rbac:groups=ops.goblinoperator.io,resources=incidents,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups=ops.goblinoperator.io,resources=incidents/status,verbs=update
 
 func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -60,15 +60,15 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, nil
 	}
 
-	// One Remediation per pod UID — idempotency across trigger types.
+	// One Incident per pod UID — idempotency across trigger types.
 	remNS := r.RemediationNamespace
 	if remNS == "" {
 		remNS = req.Namespace
 	}
-	var existing opsv1alpha1.RemediationList
+	var existing opsv1alpha1.IncidentList
 	if err := r.List(ctx, &existing,
 		client.InNamespace(remNS),
-		client.MatchingLabels{podUIDLabel: string(pod.UID)},
+		client.MatchingLabels{targetUIDLabel: string(pod.UID)},
 	); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -77,14 +77,14 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 	}
 
 	namePrefix := strings.ToLower(trigger) + "-" + pod.Name + "-"
-	rem := &opsv1alpha1.Remediation{
+	inc := &opsv1alpha1.Incident{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: namePrefix,
 			Namespace:    remNS,
-			Labels:       map[string]string{podUIDLabel: string(pod.UID)},
+			Labels:       map[string]string{targetUIDLabel: string(pod.UID)},
 		},
-		Spec: opsv1alpha1.RemediationSpec{
-			PodRef: corev1.ObjectReference{
+		Spec: opsv1alpha1.IncidentSpec{
+			TargetRef: corev1.ObjectReference{
 				APIVersion: "v1",
 				Kind:       "Pod",
 				Name:       pod.Name,
@@ -95,19 +95,19 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		},
 	}
 
-	if err := r.Create(ctx, rem); err != nil {
+	if err := r.Create(ctx, inc); err != nil {
 		if errors.IsAlreadyExists(err) {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
 
-	rem.Status.Phase = opsv1alpha1.PhaseDetected
-	if err := r.Status().Update(ctx, rem); err != nil {
+	inc.Status.Phase = opsv1alpha1.PhaseDetected
+	if err := r.Status().Update(ctx, inc); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	log.Info("Created Remediation", "trigger", trigger, "pod", req.NamespacedName, "remediation", rem.Name)
+	log.Info("Created Incident", "trigger", trigger, "pod", req.NamespacedName, "incident", inc.Name)
 	return ctrl.Result{}, nil
 }
 

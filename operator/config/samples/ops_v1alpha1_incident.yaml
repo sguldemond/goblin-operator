@@ -1,10 +1,10 @@
 apiVersion: ops.goblinoperator.io/v1alpha1
-kind: Remediation
+kind: Incident
 metadata:
-  name: remediation-sample
+  name: incident-sample
   namespace: default
 spec:
-  podRef:
+  targetRef:
     apiVersion: v1
     kind: Pod
     name: sample-pod

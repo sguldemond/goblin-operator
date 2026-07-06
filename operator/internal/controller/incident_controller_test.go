@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -30,7 +31,7 @@ import (
 	opsv1alpha1 "github.com/sguldemond/goblin/api/v1alpha1"
 )
 
-var _ = Describe("Remediation Controller", func() {
+var _ = Describe("Incident Controller", func() {
 	Context("When reconciling a resource", func() {
 		const (
 			resourceName      = "test-resource"
@@ -43,18 +44,21 @@ var _ = Describe("Remediation Controller", func() {
 			Name:      resourceName,
 			Namespace: resourceNamespace,
 		}
-		remediation := &opsv1alpha1.Remediation{}
+		incident := &opsv1alpha1.Incident{}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind Remediation")
-			err := k8sClient.Get(ctx, typeNamespacedName, remediation)
+			By("creating the custom resource for the Kind Incident")
+			err := k8sClient.Get(ctx, typeNamespacedName, incident)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &opsv1alpha1.Remediation{
+				resource := &opsv1alpha1.Incident{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: resourceNamespace,
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: opsv1alpha1.IncidentSpec{
+						TargetRef: corev1.ObjectReference{APIVersion: "v1", Kind: "Pod", Name: "sample-pod", Namespace: resourceNamespace},
+						Trigger:   "OOMKilled",
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -62,16 +66,16 @@ var _ = Describe("Remediation Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &opsv1alpha1.Remediation{}
+			resource := &opsv1alpha1.Incident{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Cleanup the specific resource instance Remediation")
+			By("Cleanup the specific resource instance Incident")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := &RemediationReconciler{
+			controllerReconciler := &IncidentReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}

@@ -1,4 +1,4 @@
 ## Append samples of your project ##
 resources:
-- ops_v1alpha1_remediation.yaml
+- ops_v1alpha1_incident.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

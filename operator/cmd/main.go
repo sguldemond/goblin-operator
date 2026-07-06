@@ -178,11 +178,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.RemediationReconciler{
+	if err := (&controller.IncidentReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "remediation")
+		setupLog.Error(err, "Failed to create controller", "controller", "incident")
 		os.Exit(1)
 	}
 

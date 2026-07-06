@@ -32,7 +32,7 @@ import (
 	opsv1alpha1 "github.com/sguldemond/goblin/api/v1alpha1"
 )
 
-const remediationJobLabel = "goblinoperator.io/remediation"
+const incidentJobLabel = "goblinoperator.io/incident"
 const noAutoRemediateAnnotation = "goblinoperator.io/no-auto-remediate"
 
 // preStartFailureReasons are container waiting reasons that mean the scout pod
@@ -44,100 +44,88 @@ var preStartFailureReasons = map[string]bool{
 	"InvalidImageName":           true,
 }
 
-// RemediationReconciler reconciles a Remediation object
-type RemediationReconciler struct {
+// IncidentReconciler reconciles an Incident object
+type IncidentReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=ops.goblinoperator.io,resources=remediations,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=ops.goblinoperator.io,resources=remediations/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=ops.goblinoperator.io,resources=remediations/finalizers,verbs=update
+// +kubebuilder:rbac:groups=ops.goblinoperator.io,resources=incidents,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=ops.goblinoperator.io,resources=incidents/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=ops.goblinoperator.io,resources=incidents/finalizers,verbs=update
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
 
-func (r *RemediationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *IncidentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	var rem opsv1alpha1.Remediation
-	if err := r.Get(ctx, req.NamespacedName, &rem); err != nil {
+	var inc opsv1alpha1.Incident
+	if err := r.Get(ctx, req.NamespacedName, &inc); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	switch rem.Status.Phase {
+	switch inc.Status.Phase {
 	case "", opsv1alpha1.PhaseDetected:
-		return r.handleDetected(ctx, &rem)
+		return r.handleDetected(ctx, &inc)
 	case opsv1alpha1.PhaseAssessing:
-		return r.handleAssessing(ctx, &rem)
+		return r.handleAssessing(ctx, &inc)
 	default:
-		log.Info("No action for phase", "phase", rem.Status.Phase)
+		log.Info("No action for phase", "phase", inc.Status.Phase)
 		return ctrl.Result{}, nil
 	}
 }
 
-func (r *RemediationReconciler) handleDetected(ctx context.Context, rem *opsv1alpha1.Remediation) (ctrl.Result, error) {
+func (r *IncidentReconciler) handleDetected(ctx context.Context, inc *opsv1alpha1.Incident) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	// If the pod carries the no-auto-remediate annotation, skip job creation.
-	// The Remediation CR is still created so a local scout can handle it manually.
-	var pod corev1.Pod
-	podKey := client.ObjectKey{Name: rem.Spec.PodRef.Name, Namespace: rem.Spec.PodRef.Namespace}
-	if err := r.Get(ctx, podKey, &pod); err == nil {
-		if pod.Annotations[noAutoRemediateAnnotation] == "true" {
-			log.Info("Pod opted out of auto-remediation, skipping job", "pod", podKey, "remediation", rem.Name)
-			rem.Status.Phase = opsv1alpha1.PhaseAssessing
-			return ctrl.Result{}, r.statusUpdate(ctx, rem)
-		}
-	}
-
 	// Idempotency: check for an existing Job.
-	existing, err := r.findJob(ctx, rem)
+	existing, err := r.findJob(ctx, inc)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if existing == nil {
-		if err := r.createScoutJob(ctx, rem); err != nil {
+		if err := r.createScoutJob(ctx, inc); err != nil {
 			return ctrl.Result{}, err
 		}
-		log.Info("Created scout Job", "remediation", rem.Name)
+		log.Info("Created scout Job", "incident", inc.Name)
 	}
 
-	rem.Status.Phase = opsv1alpha1.PhaseAssessing
-	return ctrl.Result{}, r.statusUpdate(ctx, rem)
+	inc.Status.Phase = opsv1alpha1.PhaseAssessing
+	return ctrl.Result{}, r.statusUpdate(ctx, inc)
 }
 
-func (r *RemediationReconciler) handleAssessing(ctx context.Context, rem *opsv1alpha1.Remediation) (ctrl.Result, error) {
+func (r *IncidentReconciler) handleAssessing(ctx context.Context, inc *opsv1alpha1.Incident) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	job, err := r.findJob(ctx, rem)
+	job, err := r.findJob(ctx, inc)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if job == nil {
 		// Job was deleted externally; re-create on next reconcile by dropping back to Detected.
-		rem.Status.Phase = opsv1alpha1.PhaseDetected
-		return ctrl.Result{}, r.statusUpdate(ctx, rem)
+		inc.Status.Phase = opsv1alpha1.PhaseDetected
+		return ctrl.Result{}, r.statusUpdate(ctx, inc)
 	}
 
 	for _, cond := range job.Status.Conditions {
 		if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
-			log.Info("Scout Job failed, escalating", "remediation", rem.Name)
-			rem.Status.Phase = opsv1alpha1.PhaseEscalated
-			rem.Status.Message = fmt.Sprintf("scout job failed: %s", cond.Message)
-			return ctrl.Result{}, r.statusUpdate(ctx, rem)
+			log.Info("Scout Job failed, escalating", "incident", inc.Name)
+			inc.Status.Phase = opsv1alpha1.PhaseEscalated
+			inc.Status.Message = fmt.Sprintf("scout job failed: %s", cond.Message)
+			return ctrl.Result{}, r.statusUpdate(ctx, inc)
 		}
 		if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
-			log.Info("Scout Job completed", "remediation", rem.Name)
-			rem.Status.Phase = opsv1alpha1.PhaseAwaitingApproval
-			return ctrl.Result{}, r.statusUpdate(ctx, rem)
+			log.Info("Scout Job completed", "incident", inc.Name)
+			inc.Status.Phase = opsv1alpha1.PhaseAwaitingApproval
+			return ctrl.Result{}, r.statusUpdate(ctx, inc)
 		}
 	}
 
 	// Check for pod-level pre-start failures (e.g. missing secret key).
-	if msg := r.scoutPodFailureMessage(ctx, rem.Namespace, rem.Name); msg != "" {
-		log.Info("Scout pod stuck in pre-start failure, escalating", "remediation", rem.Name, "reason", msg)
-		rem.Status.Phase = opsv1alpha1.PhaseEscalated
-		rem.Status.Message = fmt.Sprintf("scout pod cannot start: %s", msg)
-		return ctrl.Result{}, r.statusUpdate(ctx, rem)
+	if msg := r.scoutPodFailureMessage(ctx, inc.Namespace, inc.Name); msg != "" {
+		log.Info("Scout pod stuck in pre-start failure, escalating", "incident", inc.Name, "reason", msg)
+		inc.Status.Phase = opsv1alpha1.PhaseEscalated
+		inc.Status.Message = fmt.Sprintf("scout pod cannot start: %s", msg)
+		return ctrl.Result{}, r.statusUpdate(ctx, inc)
 	}
 
 	// Job still running.
@@ -146,11 +134,11 @@ func (r *RemediationReconciler) handleAssessing(ctx context.Context, rem *opsv1a
 
 // scoutPodFailureMessage returns the waiting message if the scout pod is stuck
 // in a pre-start failure state (CreateContainerConfigError, ImagePullBackOff, etc.).
-func (r *RemediationReconciler) scoutPodFailureMessage(ctx context.Context, namespace, remName string) string {
+func (r *IncidentReconciler) scoutPodFailureMessage(ctx context.Context, namespace, incName string) string {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods,
 		client.InNamespace(namespace),
-		client.MatchingLabels{remediationJobLabel: remName},
+		client.MatchingLabels{incidentJobLabel: incName},
 	); err != nil {
 		return ""
 	}
@@ -164,11 +152,11 @@ func (r *RemediationReconciler) scoutPodFailureMessage(ctx context.Context, name
 	return ""
 }
 
-func (r *RemediationReconciler) findJob(ctx context.Context, rem *opsv1alpha1.Remediation) (*batchv1.Job, error) {
+func (r *IncidentReconciler) findJob(ctx context.Context, inc *opsv1alpha1.Incident) (*batchv1.Job, error) {
 	var jobs batchv1.JobList
 	if err := r.List(ctx, &jobs,
-		client.InNamespace(rem.Namespace),
-		client.MatchingLabels{remediationJobLabel: rem.Name},
+		client.InNamespace(inc.Namespace),
+		client.MatchingLabels{incidentJobLabel: inc.Name},
 	); err != nil {
 		return nil, err
 	}
@@ -178,13 +166,13 @@ func (r *RemediationReconciler) findJob(ctx context.Context, rem *opsv1alpha1.Re
 	return &jobs.Items[0], nil
 }
 
-func (r *RemediationReconciler) createScoutJob(ctx context.Context, rem *opsv1alpha1.Remediation) error {
+func (r *IncidentReconciler) createScoutJob(ctx context.Context, inc *opsv1alpha1.Incident) error {
 	ttl := int32(300)
 	optional := true
 
 	scoutEnv := []corev1.EnvVar{
-		{Name: "REMEDIATION_NAME", Value: rem.Name},
-		{Name: "REMEDIATION_NAMESPACE", Value: rem.Namespace},
+		{Name: "INCIDENT_NAME", Value: inc.Name},
+		{Name: "INCIDENT_NAMESPACE", Value: inc.Namespace},
 		{
 			Name: "LLM_API_KEY",
 			ValueFrom: &corev1.EnvVarSource{
@@ -233,15 +221,15 @@ func (r *RemediationReconciler) createScoutJob(ctx context.Context, rem *opsv1al
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "goblin-scout-" + rem.Name + "-",
-			Namespace:    rem.Namespace,
-			Labels:       map[string]string{remediationJobLabel: rem.Name},
+			GenerateName: "goblin-scout-" + inc.Name + "-",
+			Namespace:    inc.Namespace,
+			Labels:       map[string]string{incidentJobLabel: inc.Name},
 		},
 		Spec: batchv1.JobSpec{
 			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels:      map[string]string{remediationJobLabel: rem.Name},
+					Labels:      map[string]string{incidentJobLabel: inc.Name},
 					Annotations: map[string]string{noAutoRemediateAnnotation: "true"},
 				},
 				Spec: podSpec,
@@ -249,7 +237,7 @@ func (r *RemediationReconciler) createScoutJob(ctx context.Context, rem *opsv1al
 		},
 	}
 
-	if err := ctrl.SetControllerReference(rem, job, r.Scheme); err != nil {
+	if err := ctrl.SetControllerReference(inc, job, r.Scheme); err != nil {
 		return err
 	}
 	return r.Create(ctx, job)
@@ -257,8 +245,8 @@ func (r *RemediationReconciler) createScoutJob(ctx context.Context, rem *opsv1al
 
 // statusUpdate writes status and silently requeues on conflict rather than
 // logging an error. Conflicts happen when the agent patches status concurrently.
-func (r *RemediationReconciler) statusUpdate(ctx context.Context, rem *opsv1alpha1.Remediation) error {
-	if err := r.Status().Update(ctx, rem); apierrors.IsConflict(err) {
+func (r *IncidentReconciler) statusUpdate(ctx context.Context, inc *opsv1alpha1.Incident) error {
+	if err := r.Status().Update(ctx, inc); apierrors.IsConflict(err) {
 		return nil // controller-runtime will requeue on next watch event
 	} else {
 		return err
@@ -266,10 +254,10 @@ func (r *RemediationReconciler) statusUpdate(ctx context.Context, rem *opsv1alph
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *RemediationReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *IncidentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&opsv1alpha1.Remediation{}).
+		For(&opsv1alpha1.Incident{}).
 		Owns(&batchv1.Job{}).
-		Named("remediation").
+		Named("incident").
 		Complete(r)
 }
