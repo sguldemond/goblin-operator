@@ -53,7 +53,7 @@ func (s *Scout) Run(ctx context.Context) error {
 
 	toolList := tools.NewAll(s.client, s.dynCli, mapper,
 		incident.PodNamespace,
-		s.cfg.RemediationName, s.cfg.RemediationNamespace,
+		s.cfg.IncidentName, s.cfg.IncidentNamespace,
 	)
 
 	fmt.Println(">> gathering context...")
@@ -256,29 +256,29 @@ loop:
 }
 
 func (s *Scout) loadIncident(ctx context.Context) (*Incident, error) {
-	obj, err := s.dynCli.Resource(tools.RemediationGVR).
-		Namespace(s.cfg.RemediationNamespace).
-		Get(ctx, s.cfg.RemediationName, metav1.GetOptions{})
+	obj, err := s.dynCli.Resource(tools.IncidentGVR).
+		Namespace(s.cfg.IncidentNamespace).
+		Get(ctx, s.cfg.IncidentName, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
 
 	spec, _, _ := unstructuredMap(obj.Object, "spec")
-	podRef, _, _ := unstructuredMap(spec, "podRef")
+	targetRef, _, _ := unstructuredMap(spec, "targetRef")
 
 	incident := &Incident{
-		RemediationName: s.cfg.RemediationName,
-		Namespace:       s.cfg.RemediationNamespace,
-		Trigger:         stringField(spec, "trigger"),
-		PodName:         stringField(podRef, "name"),
-		PodNamespace:    stringField(podRef, "namespace"),
+		IncidentName: s.cfg.IncidentName,
+		Namespace:    s.cfg.IncidentNamespace,
+		Trigger:      stringField(spec, "trigger"),
+		PodName:      stringField(targetRef, "name"),
+		PodNamespace: stringField(targetRef, "namespace"),
 	}
 
 	if incident.PodName == "" {
-		return nil, fmt.Errorf("podRef.name is empty in Remediation CR")
+		return nil, fmt.Errorf("targetRef.name is empty in Incident CR")
 	}
 	if incident.PodNamespace == "" {
-		incident.PodNamespace = s.cfg.RemediationNamespace
+		incident.PodNamespace = s.cfg.IncidentNamespace
 	}
 
 	return incident, nil

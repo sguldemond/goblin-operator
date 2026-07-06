@@ -20,11 +20,11 @@ For any other response (investigation, questions, escalation) keep it short and 
 
 // Incident holds the parsed CR fields the scout was dispatched for.
 type Incident struct {
-	RemediationName string
-	Namespace       string
-	PodName         string
-	PodNamespace    string
-	Trigger         string
+	IncidentName string
+	Namespace    string
+	PodName      string
+	PodNamespace string
+	Trigger      string
 }
 
 // BuildContext assembles the initial user message: incident header + full tool output.
@@ -32,8 +32,8 @@ func BuildContext(incident Incident, results []tools.ToolResult) string {
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("Incident: %s pod %s/%s\n", incident.Trigger, incident.PodNamespace, incident.PodName))
-	sb.WriteString(fmt.Sprintf("Remediation CR: apiVersion=ops.goblinoperator.io/v1alpha1 kind=Remediation namespace=%s name=%s\n\n",
-		incident.Namespace, incident.RemediationName))
+	sb.WriteString(fmt.Sprintf("Incident CR: apiVersion=ops.goblinoperator.io/v1alpha1 kind=Incident namespace=%s name=%s\n\n",
+		incident.Namespace, incident.IncidentName))
 
 	for _, r := range results {
 		sb.WriteString(fmt.Sprintf("--- %s ---\n", r.ToolName))

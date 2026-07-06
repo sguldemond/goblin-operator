@@ -11,10 +11,10 @@ import (
 type Escalate struct {
 	triggered bool
 	reason    string
-	status    *UpdateRemediationStatus
+	status    *UpdateIncidentStatus
 }
 
-func NewEscalate(status *UpdateRemediationStatus) *Escalate {
+func NewEscalate(status *UpdateIncidentStatus) *Escalate {
 	return &Escalate{status: status}
 }
 

@@ -17,7 +17,7 @@ import (
 type PatchDeployment struct {
 	client          kubernetes.Interface
 	targetNamespace string
-	status          *UpdateRemediationStatus
+	status          *UpdateIncidentStatus
 	pending         *pendingApproval
 }
 
@@ -28,7 +28,7 @@ type pendingApproval struct {
 	diff       string
 }
 
-func NewPatchDeployment(client kubernetes.Interface, targetNamespace string, status *UpdateRemediationStatus) *PatchDeployment {
+func NewPatchDeployment(client kubernetes.Interface, targetNamespace string, status *UpdateIncidentStatus) *PatchDeployment {
 	return &PatchDeployment{client: client, targetNamespace: targetNamespace, status: status}
 }
 
@@ -163,18 +163,18 @@ func (t *PatchDeployment) verifyRollout(ctx context.Context, namespace, deployNa
 				st.Replicas == desired &&
 				st.AvailableReplicas == desired
 			if rolledOut {
-				remStatus := "Applied"
-				remNote := ""
+				incStatus := "Applied"
+				incNote := ""
 				if t.status != nil {
 					params, _ := json.Marshal(map[string]string{"phase": "Applied"})
 					if _, err := t.status.Execute(ctx, params); err != nil {
-						remStatus = "Applied (warning: status update failed)"
-						remNote = fmt.Sprintf(" (%v)", err)
+						incStatus = "Applied (warning: status update failed)"
+						incNote = fmt.Sprintf(" (%v)", err)
 					}
 				}
-				m.Send(fmt.Sprintf("Rollout complete: %d/%d replicas updated and available.\nRemediation status: %s%s", //nolint:errcheck
-					st.AvailableReplicas, desired, remStatus, remNote))
-				return fmt.Sprintf("Rollout complete: %d/%d replicas available. Remediation status: %s.", st.AvailableReplicas, desired, remStatus)
+				m.Send(fmt.Sprintf("Rollout complete: %d/%d replicas updated and available.\nIncident status: %s%s", //nolint:errcheck
+					st.AvailableReplicas, desired, incStatus, incNote))
+				return fmt.Sprintf("Rollout complete: %d/%d replicas available. Incident status: %s.", st.AvailableReplicas, desired, incStatus)
 			}
 		}
 

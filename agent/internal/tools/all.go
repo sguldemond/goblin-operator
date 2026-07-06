@@ -12,10 +12,10 @@ func NewAll(
 	dynCli dynamic.Interface,
 	mapper meta.RESTMapper,
 	targetNamespace string,
-	remediationName string,
-	remediationNamespace string,
+	incidentName string,
+	incidentNamespace string,
 ) []Tool {
-	status := NewUpdateRemediationStatus(dynCli, remediationName, remediationNamespace)
+	status := NewUpdateIncidentStatus(dynCli, incidentName, incidentNamespace)
 	return []Tool{
 		NewGetResource(dynCli, mapper),
 		NewGetPodLogs(client),

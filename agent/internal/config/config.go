@@ -6,18 +6,18 @@ import (
 )
 
 type Config struct {
-	RemediationName      string
-	RemediationNamespace string
-	APIKey               string
-	Provider             string // "anthropic" (default) | "openai"
-	Model                string
+	IncidentName      string
+	IncidentNamespace string
+	APIKey            string
+	Provider          string // "anthropic" (default) | "openai"
+	Model             string
 }
 
 func Load() (*Config, error) {
-	name := os.Getenv("REMEDIATION_NAME")
-	ns := os.Getenv("REMEDIATION_NAMESPACE")
+	name := os.Getenv("INCIDENT_NAME")
+	ns := os.Getenv("INCIDENT_NAMESPACE")
 	if name == "" || ns == "" {
-		return nil, fmt.Errorf("REMEDIATION_NAME and REMEDIATION_NAMESPACE must be set")
+		return nil, fmt.Errorf("INCIDENT_NAME and INCIDENT_NAMESPACE must be set")
 	}
 
 	apiKey := os.Getenv("LLM_API_KEY")
@@ -46,10 +46,10 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		RemediationName:      name,
-		RemediationNamespace: ns,
-		APIKey:               apiKey,
-		Provider:             provider,
-		Model:                model,
+		IncidentName:      name,
+		IncidentNamespace: ns,
+		APIKey:            apiKey,
+		Provider:          provider,
+		Model:             model,
 	}, nil
 }
