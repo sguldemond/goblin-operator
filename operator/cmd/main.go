@@ -187,15 +187,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.PodReconciler{
-		Client:               mgr.GetClient(),
-		Scheme:               mgr.GetScheme(),
-		RemediationNamespace: "goblin",
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "pod-failure")
-		os.Exit(1)
-	}
-
 	registry := detection.NewRegistry()
 
 	if err := (&controller.PolicyReconciler{
@@ -203,6 +194,15 @@ func main() {
 		Registry: registry,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "incidentpolicy")
+		os.Exit(1)
+	}
+
+	if err := (&controller.IncidentDetector{
+		Client:            mgr.GetClient(),
+		Registry:          registry,
+		IncidentNamespace: "goblin",
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "incident-detector")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
