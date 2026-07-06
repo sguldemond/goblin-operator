@@ -27,7 +27,7 @@ func NewAnthropic(apiKey string) SendFunc {
 		httpReq.Header.Set("anthropic-version", "2023-06-01")
 		httpReq.Header.Set("content-type", "application/json")
 
-		resp, err := http.DefaultClient.Do(httpReq)
+		resp, err := httpClient.Do(httpReq)
 		if err != nil {
 			return Response{}, err
 		}

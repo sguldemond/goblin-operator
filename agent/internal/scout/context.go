@@ -7,7 +7,6 @@ import (
 	"github.com/sguldemond/goblin/agent/internal/tools"
 )
 
-
 const systemPrompt = `You are goblin-scout. A pod has failed — investigate and propose one fix.
 Do not apply changes without explicit human approval.
 Plain text only — no markdown tables, no pipe characters, no ## headers.

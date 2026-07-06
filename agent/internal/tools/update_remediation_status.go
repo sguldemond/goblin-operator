@@ -11,7 +11,8 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
-var remediationGVR = schema.GroupVersionResource{
+// RemediationGVR is the GroupVersionResource for the Remediation CRD.
+var RemediationGVR = schema.GroupVersionResource{
 	Group:    "ops.goblinoperator.io",
 	Version:  "v1alpha1",
 	Resource: "remediations",
@@ -63,7 +64,7 @@ func (t *UpdateRemediationStatus) Execute(ctx context.Context, raw json.RawMessa
 	}
 	patch, _ := json.Marshal(map[string]any{"status": status})
 
-	_, err := t.dynCli.Resource(remediationGVR).
+	_, err := t.dynCli.Resource(RemediationGVR).
 		Namespace(t.namespace).
 		Patch(ctx, t.name, types.MergePatchType, patch, metav1.PatchOptions{}, "status")
 	if err != nil {

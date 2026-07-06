@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os/signal"
+	"syscall"
 
 	"github.com/sguldemond/goblin/agent/internal/config"
 	"github.com/sguldemond/goblin/agent/internal/k8s"
@@ -42,7 +44,8 @@ func run() error {
 		return fmt.Errorf("creating scout: %w", err)
 	}
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 	if err := s.Run(ctx); err != nil {
 		return fmt.Errorf("running scout: %w", err)
 	}

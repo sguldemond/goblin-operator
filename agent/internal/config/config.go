@@ -29,6 +29,12 @@ func Load() (*Config, error) {
 	if provider == "" {
 		provider = "anthropic"
 	}
+	switch provider {
+	case "anthropic", "openai":
+	default:
+		return nil, fmt.Errorf("unknown LLM_PROVIDER %q (supported: anthropic, openai)", provider)
+	}
+
 	model := os.Getenv("LLM_MODEL")
 	if model == "" {
 		switch provider {

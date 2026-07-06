@@ -7,11 +7,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
-
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -22,12 +20,6 @@ import (
 	"github.com/sguldemond/goblin/agent/internal/messenger"
 	"github.com/sguldemond/goblin/agent/internal/tools"
 )
-
-var remediationGVR = schema.GroupVersionResource{
-	Group:    "ops.goblinoperator.io",
-	Version:  "v1alpha1",
-	Resource: "remediations",
-}
 
 const maxTokens = 8192
 
@@ -103,11 +95,19 @@ func (s *Scout) Run(ctx context.Context) error {
 	return nil
 }
 
-type sendFn func(ctx context.Context, req llm.Request) (llm.Response, error)
-
+// runLoop is the heart of the agent: prompt the LLM, run whatever tools it
+// asks for, feed the results back, and repeat. Strip away the hooks and the
+// messenger and this is what every agent really is — a conversation that keeps
+// going until the model (or the human) decides it's done.
+//
+// Each turn:
+//  1. Send the running conversation to the LLM.
+//  2. If it wants tools, run them and loop back with the results.
+//  3. Otherwise show its reply and ask the human what's next.
+//  4. Repeat until a tool, a hook, or the user ends the session.
 func (s *Scout) runLoop(
 	ctx context.Context,
-	send sendFn,
+	send llm.SendFunc,
 	contextMsg string,
 	toolList []tools.Tool,
 	m messenger.Messenger,
@@ -256,7 +256,7 @@ loop:
 }
 
 func (s *Scout) loadIncident(ctx context.Context) (*Incident, error) {
-	obj, err := s.dynCli.Resource(remediationGVR).
+	obj, err := s.dynCli.Resource(tools.RemediationGVR).
 		Namespace(s.cfg.RemediationNamespace).
 		Get(ctx, s.cfg.RemediationName, metav1.GetOptions{})
 	if err != nil {

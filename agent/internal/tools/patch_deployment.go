@@ -8,7 +8,6 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
@@ -136,14 +135,11 @@ func (t *PatchDeployment) AfterTurn(ctx context.Context, m messenger.Messenger) 
 	return []string{msg}, false, nil
 }
 
-// verifyRollout polls the deployment's pods until all are ready or timeout.
+// verifyRollout polls the Deployment's rollout status until the new revision is
+// fully rolled out or timeout. It uses the Deployment's own status counters
+// (the same signals as `kubectl rollout status`) rather than counting pods by
+// selector, which would see old ready replicas and report success too early.
 func (t *PatchDeployment) verifyRollout(ctx context.Context, namespace, deployName string, m messenger.Messenger) string {
-	deploy, err := t.client.AppsV1().Deployments(namespace).Get(ctx, deployName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Sprintf("Could not verify rollout: %v", err)
-	}
-
-	selector := labels.Set(deploy.Spec.Selector.MatchLabels).String()
 	timeout := 2 * time.Minute
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(5 * time.Second)
@@ -151,18 +147,22 @@ func (t *PatchDeployment) verifyRollout(ctx context.Context, namespace, deployNa
 
 	m.Send("Verifying rollout (timeout 2m)...") //nolint:errcheck
 	for {
-		pods, err := t.client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
-		if err == nil && len(pods.Items) > 0 {
-			ready := 0
-			for _, pod := range pods.Items {
-				for _, cond := range pod.Status.Conditions {
-					if cond.Type == "Ready" && cond.Status == "True" {
-						ready++
-					}
-				}
+		deploy, err := t.client.AppsV1().Deployments(namespace).Get(ctx, deployName, metav1.GetOptions{})
+		if err == nil {
+			desired := int32(1)
+			if deploy.Spec.Replicas != nil {
+				desired = *deploy.Spec.Replicas
 			}
-			m.Send(fmt.Sprintf("  %d/%d pods ready", ready, len(pods.Items))) //nolint:errcheck
-			if ready == len(pods.Items) {
+			st := deploy.Status
+			m.Send(fmt.Sprintf("  updated %d/%d, available %d", st.UpdatedReplicas, desired, st.AvailableReplicas)) //nolint:errcheck
+
+			// Rollout is complete when the controller has observed the new spec,
+			// every replica is the updated revision, none are stale, and all are available.
+			rolledOut := st.ObservedGeneration >= deploy.Generation &&
+				st.UpdatedReplicas == desired &&
+				st.Replicas == desired &&
+				st.AvailableReplicas == desired
+			if rolledOut {
 				remStatus := "Applied"
 				remNote := ""
 				if t.status != nil {
@@ -172,13 +172,9 @@ func (t *PatchDeployment) verifyRollout(ctx context.Context, namespace, deployNa
 						remNote = fmt.Sprintf(" (%v)", err)
 					}
 				}
-				names := make([]string, len(pods.Items))
-				for i, p := range pods.Items {
-					names[i] = p.Name
-				}
-				m.Send(fmt.Sprintf("Pod status: %d/%d ready — %s\nRemediation status: %s%s", //nolint:errcheck
-					ready, len(pods.Items), strings.Join(names, ", "), remStatus, remNote))
-				return fmt.Sprintf("Pod status: %d/%d ready. Remediation status: %s.", ready, len(pods.Items), remStatus)
+				m.Send(fmt.Sprintf("Rollout complete: %d/%d replicas updated and available.\nRemediation status: %s%s", //nolint:errcheck
+					st.AvailableReplicas, desired, remStatus, remNote))
+				return fmt.Sprintf("Rollout complete: %d/%d replicas available. Remediation status: %s.", st.AvailableReplicas, desired, remStatus)
 			}
 		}
 

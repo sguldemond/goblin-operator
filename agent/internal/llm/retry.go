@@ -3,8 +3,13 @@ package llm
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 )
+
+// httpClient is shared by all provider adapters. The timeout caps a single
+// request (including body read) so a hung connection can never block forever.
+var httpClient = &http.Client{Timeout: 120 * time.Second}
 
 // APIError is returned by providers when the HTTP response is not 200.
 type APIError struct {

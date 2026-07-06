@@ -28,7 +28,7 @@ func NewOpenAI(apiKey string) SendFunc {
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 		httpReq.Header.Set("content-type", "application/json")
 
-		resp, err := http.DefaultClient.Do(httpReq)
+		resp, err := httpClient.Do(httpReq)
 		if err != nil {
 			return Response{}, err
 		}
@@ -72,8 +72,8 @@ type openAIContentPart struct {
 }
 
 type openAITool struct {
-	Type     string          `json:"type"` // "function"
-	Function openAIFunction  `json:"function"`
+	Type     string         `json:"type"` // "function"
+	Function openAIFunction `json:"function"`
 }
 
 type openAIFunction struct {
@@ -118,17 +118,23 @@ func toOpenAIRequest(req Request) openAIRequest {
 			// Other content blocks are batched as a single user message.
 			var userParts []openAIContentPart
 			for _, c := range m.Content {
-				if c.Type == "tool_result" {
+				switch c.Type {
+				case "tool_result":
 					if len(userParts) > 0 {
 						msgs = append(msgs, openAIMessage{Role: "user", Content: userParts})
 						userParts = nil
 					}
+					// OpenAI's tool role has no is_error flag, so signal failure inline.
+					content := c.Content
+					if c.IsError {
+						content = "[error] " + content
+					}
 					msgs = append(msgs, openAIMessage{
 						Role:       "tool",
-						Content:    c.Content,
+						Content:    content,
 						ToolCallID: c.ToolUseID,
 					})
-				} else if c.Type == "text" {
+				case "text":
 					userParts = append(userParts, openAIContentPart{Type: "text", Text: c.Text})
 				}
 			}
@@ -140,9 +146,10 @@ func toOpenAIRequest(req Request) openAIRequest {
 			var text string
 			var toolCalls []openAIToolCall
 			for _, c := range m.Content {
-				if c.Type == "text" {
+				switch c.Type {
+				case "text":
 					text = c.Text
-				} else if c.Type == "tool_use" {
+				case "tool_use":
 					toolCalls = append(toolCalls, openAIToolCall{
 						ID:   c.ID,
 						Type: "function",
