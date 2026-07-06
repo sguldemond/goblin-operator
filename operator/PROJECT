@@ -15,7 +15,7 @@ resources:
   controller: true
   domain: goblinoperator.io
   group: ops
-  kind: Remediation
+  kind: Incident
   path: github.com/sguldemond/goblin/api/v1alpha1
   version: v1alpha1
 version: "3"

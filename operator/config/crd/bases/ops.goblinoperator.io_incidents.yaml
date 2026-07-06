@@ -4,19 +4,22 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
-  name: remediations.ops.goblinoperator.io
+  name: incidents.ops.goblinoperator.io
 spec:
   group: ops.goblinoperator.io
   names:
-    kind: Remediation
-    listKind: RemediationList
-    plural: remediations
-    singular: remediation
+    kind: Incident
+    listKind: IncidentList
+    plural: incidents
+    singular: incident
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
     - jsonPath: .spec.trigger
       name: Trigger
+      type: string
+    - jsonPath: .spec.targetRef.kind
+      name: Target
       type: string
     - jsonPath: .status.phase
       name: Phase
@@ -44,9 +47,14 @@ spec:
             type: object
           spec:
             properties:
-              podRef:
-                description: ObjectReference contains enough information to let you
-                  inspect or modify the referred object.
+              policyRef:
+                description: PolicyRef is the name of the IncidentPolicy that fired,
+                  if any.
+                type: string
+              targetRef:
+                description: |-
+                  TargetRef points at the object the incident is about. Carries its own
+                  apiVersion/kind, so it is generic across resource kinds.
                 properties:
                   apiVersion:
                     description: API version of the referent.
@@ -89,12 +97,12 @@ spec:
                 type: object
                 x-kubernetes-map-type: atomic
               trigger:
-                enum:
-                - OOMKilled
-                - Unschedulable
+                description: Trigger is the policy-defined name of what was detected
+                  (e.g. "OOMKilled").
+                minLength: 1
                 type: string
             required:
-            - podRef
+            - targetRef
             - trigger
             type: object
           status:

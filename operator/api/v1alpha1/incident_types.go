@@ -23,52 +23,59 @@ import (
 )
 
 // +kubebuilder:validation:Enum=Detected;Assessing;AwaitingApproval;Applied;Rejected;Escalated;HandedOff
-type RemediationPhase string
+type IncidentPhase string
 
 const (
-	PhaseDetected         RemediationPhase = "Detected"
-	PhaseAssessing        RemediationPhase = "Assessing"
-	PhaseAwaitingApproval RemediationPhase = "AwaitingApproval"
-	PhaseApplied          RemediationPhase = "Applied"
-	PhaseRejected         RemediationPhase = "Rejected"
-	PhaseEscalated        RemediationPhase = "Escalated"
-	PhaseHandedOff        RemediationPhase = "HandedOff"
+	PhaseDetected         IncidentPhase = "Detected"
+	PhaseAssessing        IncidentPhase = "Assessing"
+	PhaseAwaitingApproval IncidentPhase = "AwaitingApproval"
+	PhaseApplied          IncidentPhase = "Applied"
+	PhaseRejected         IncidentPhase = "Rejected"
+	PhaseEscalated        IncidentPhase = "Escalated"
+	PhaseHandedOff        IncidentPhase = "HandedOff"
 )
 
-type RemediationSpec struct {
-	PodRef corev1.ObjectReference `json:"podRef"`
+type IncidentSpec struct {
+	// TargetRef points at the object the incident is about. Carries its own
+	// apiVersion/kind, so it is generic across resource kinds.
+	TargetRef corev1.ObjectReference `json:"targetRef"`
 
-	// +kubebuilder:validation:Enum=OOMKilled;Unschedulable
+	// Trigger is the policy-defined name of what was detected (e.g. "OOMKilled").
+	// +kubebuilder:validation:MinLength=1
 	Trigger string `json:"trigger"`
+
+	// PolicyRef is the name of the IncidentPolicy that fired, if any.
+	PolicyRef string `json:"policyRef,omitempty"`
 }
 
-type RemediationStatus struct {
-	Phase   RemediationPhase `json:"phase,omitempty"`
-	Message string           `json:"message,omitempty"`
+type IncidentStatus struct {
+	Phase   IncidentPhase `json:"phase,omitempty"`
+	Message string        `json:"message,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Trigger",type=string,JSONPath=`.spec.trigger`
+// +kubebuilder:printcolumn:name="Target",type=string,JSONPath=`.spec.targetRef.kind`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-type Remediation struct {
+type Incident struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   RemediationSpec   `json:"spec"`
-	Status RemediationStatus `json:"status,omitempty"`
+	Spec   IncidentSpec   `json:"spec"`
+	Status IncidentStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
-type RemediationList struct {
+type IncidentList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []Remediation `json:"items"`
+	Items           []Incident `json:"items"`
 }
 
 func init() {
 	SchemeBuilder.Register(func(s *runtime.Scheme) error {
-		s.AddKnownTypes(SchemeGroupVersion, &Remediation{}, &RemediationList{})
+		s.AddKnownTypes(SchemeGroupVersion, &Incident{}, &IncidentList{})
 		return nil
 	})
 }
