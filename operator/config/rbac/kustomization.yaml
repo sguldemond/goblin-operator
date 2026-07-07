@@ -22,7 +22,7 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the operator itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
-- remediation_admin_role.yaml
-- remediation_editor_role.yaml
-- remediation_viewer_role.yaml
+- incident_admin_role.yaml
+- incident_editor_role.yaml
+- incident_viewer_role.yaml
 
