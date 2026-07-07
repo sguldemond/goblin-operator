@@ -1,0 +1,15 @@
+apiVersion: ops.goblinoperator.io/v1alpha1
+kind: IncidentPolicy
+metadata:
+  name: unschedulable
+spec:
+  target:
+    apiVersion: v1
+    kind: Pod
+  detect:
+    trigger: Unschedulable
+    expression: >-
+      object.status.phase == 'Pending' &&
+      has(object.status.conditions) &&
+      object.status.conditions.exists(c,
+        c.type == 'PodScheduled' && c.status == 'False' && c.reason == 'Unschedulable')
