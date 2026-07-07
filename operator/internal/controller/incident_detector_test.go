@@ -120,6 +120,71 @@ var _ = Describe("IncidentDetector", func() {
 		Expect(list.Items[0].Labels[targetUIDLabel]).To(Equal(string(pod.UID)))
 	})
 
+	It("creates exactly one Incident when the same pod is reconciled twice", func() {
+		ctx := context.Background()
+		pod := makePod(fmt.Sprintf("oom-pod-dup-%d", GinkgoRandomSeed()))
+		DeferCleanup(func() {
+			_ = k8sClient.Delete(ctx, pod)
+		})
+
+		pod.Status = corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name: "app",
+				LastTerminationState: corev1.ContainerState{
+					Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"},
+				},
+			}},
+		}
+		Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+
+		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}}
+		_, err := detector.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = detector.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred())
+
+		var list opsv1alpha1.IncidentList
+		Expect(k8sClient.List(ctx, &list,
+			client.InNamespace(namespace),
+			client.MatchingLabels{targetUIDLabel: string(pod.UID)},
+		)).To(Succeed())
+		Expect(list.Items).To(HaveLen(1))
+	})
+
+	It("creates no Incident for a pod annotated no-auto-remediate", func() {
+		ctx := context.Background()
+		pod := makePod(fmt.Sprintf("oom-pod-optout-%d", GinkgoRandomSeed()))
+		pod.Annotations = map[string]string{noAutoRemediateAnnotation: "true"}
+		Expect(k8sClient.Update(ctx, pod)).To(Succeed())
+		DeferCleanup(func() {
+			_ = k8sClient.Delete(ctx, pod)
+		})
+
+		pod.Status = corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name: "app",
+				LastTerminationState: corev1.ContainerState{
+					Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"},
+				},
+			}},
+		}
+		Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+
+		_, err := detector.Reconcile(ctx, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		var list opsv1alpha1.IncidentList
+		Expect(k8sClient.List(ctx, &list,
+			client.InNamespace(namespace),
+			client.MatchingLabels{targetUIDLabel: string(pod.UID)},
+		)).To(Succeed())
+		Expect(list.Items).To(BeEmpty())
+	})
+
 	It("creates no Incident for a healthy pod", func() {
 		ctx := context.Background()
 		pod := makePod(fmt.Sprintf("healthy-pod-%d", GinkgoRandomSeed()))

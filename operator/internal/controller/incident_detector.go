@@ -26,8 +26,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	opsv1alpha1 "github.com/sguldemond/goblin/api/v1alpha1"
 	"github.com/sguldemond/goblin/internal/detection"
@@ -107,9 +110,9 @@ func (r *IncidentDetector) createIncident(ctx context.Context, pod *corev1.Pod, 
 
 	inc := &opsv1alpha1.Incident{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: strings.ToLower(p.Trigger) + "-" + pod.Name + "-",
-			Namespace:    ns,
-			Labels:       map[string]string{targetUIDLabel: string(pod.UID)},
+			Name:      strings.ToLower(p.Trigger) + "-" + string(pod.UID),
+			Namespace: ns,
+			Labels:    map[string]string{targetUIDLabel: string(pod.UID)},
 		},
 		Spec: opsv1alpha1.IncidentSpec{
 			TargetRef: corev1.ObjectReference{
@@ -136,7 +139,12 @@ func (r *IncidentDetector) createIncident(ctx context.Context, pod *corev1.Pod, 
 
 func (r *IncidentDetector) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&corev1.Pod{}).
+		For(&corev1.Pod{}, builder.WithPredicates(
+			predicate.And(
+				predicate.ResourceVersionChangedPredicate{},
+				predicate.Funcs{DeleteFunc: func(event.DeleteEvent) bool { return false }},
+			),
+		)).
 		Named("incident-detector").
 		Complete(r)
 }
