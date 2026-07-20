@@ -30,6 +30,14 @@ type AfterTurnHook interface {
 	AfterTurn(ctx context.Context, m messenger.Messenger) (msgs []string, stop bool, err error)
 }
 
+// OutcomeReporter is an optional interface for tools that conclude something
+// about the incident. The scout loop — not the tool — writes the Incident CR,
+// so tools stay ignorant of the CR entirely. Returns ok=false when there is
+// nothing to report; implementations report once and then clear.
+type OutcomeReporter interface {
+	Outcome() (phase, message string, ok bool)
+}
+
 // ToolResult holds the output of a single tool execution for context assembly.
 type ToolResult struct {
 	ToolName string

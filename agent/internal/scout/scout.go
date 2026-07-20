@@ -43,7 +43,7 @@ func (s *Scout) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("loading incident from CR: %w", err)
 	}
-	fmt.Printf(">> %s: %s/%s\n", incident.Trigger, incident.PodNamespace, incident.PodName)
+	fmt.Printf(">> %s: %s %s/%s\n", incident.Trigger, incident.TargetKind, incident.TargetNamespace, incident.TargetName)
 
 	gr, err := restmapper.GetAPIGroupResources(s.client.Discovery())
 	if err != nil {
@@ -51,15 +51,14 @@ func (s *Scout) Run(ctx context.Context) error {
 	}
 	mapper := restmapper.NewDiscoveryRESTMapper(gr)
 
-	toolList := tools.NewAll(s.client, s.dynCli, mapper,
-		incident.PodNamespace,
+	toolList, status := tools.NewAll(s.client, s.dynCli, mapper,
+		incident.TargetNamespace,
 		s.cfg.IncidentName, s.cfg.IncidentNamespace,
 	)
 
 	fmt.Println(">> gathering context...")
 	getResource := tools.NewGetResource(s.dynCli, mapper)
-	getPodLogs := tools.NewGetPodLogs(s.client)
-	contextMsg := BuildContext(*incident, s.gatherContext(ctx, incident, getResource, getPodLogs))
+	contextMsg := BuildContext(*incident, gatherContext(ctx, incident, getResource))
 
 	fmt.Println(">> waking the goblin...")
 
@@ -72,7 +71,7 @@ func (s *Scout) Run(ctx context.Context) error {
 		}
 		m = tg
 		fmt.Println(">> telegram mode")
-		tg.Send(fmt.Sprintf("🔔 Pod <code>%s/%s</code> — <b>%s</b>\n\nScout dispatched, investigating now.", incident.PodNamespace, incident.PodName, incident.Trigger)) //nolint:errcheck
+		tg.Send(fmt.Sprintf("🔔 %s <code>%s/%s</code> — <b>%s</b>\n\nScout dispatched, investigating now.", incident.TargetKind, incident.TargetNamespace, incident.TargetName, incident.Trigger)) //nolint:errcheck
 	} else {
 		m = messenger.NewTTY(os.Stdin, os.Stdout)
 	}
@@ -88,7 +87,7 @@ func (s *Scout) Run(ctx context.Context) error {
 		fmt.Printf("\r>> API overloaded, retrying in %s (attempt %d)...\n", delay.Round(time.Second), attempt)
 	})
 	fmt.Printf(">> provider: %s, model: %s\n", s.cfg.Provider, s.cfg.Model)
-	if err := s.runLoop(ctx, send, contextMsg, toolList, m); err != nil {
+	if err := s.runLoop(ctx, send, contextMsg, toolList, status, m); err != nil {
 		m.Send(fmt.Sprintf("❌ Scout failed: %v", err)) //nolint:errcheck
 		return err
 	}
@@ -110,6 +109,7 @@ func (s *Scout) runLoop(
 	send llm.SendFunc,
 	contextMsg string,
 	toolList []tools.Tool,
+	status *tools.UpdateIncidentStatus,
 	m messenger.Messenger,
 ) error {
 	toolMap := make(map[string]tools.Tool, len(toolList))
@@ -177,10 +177,12 @@ loop:
 				}
 				if h, ok := t.(tools.AfterToolHook); ok {
 					if stop, err := h.AfterTool(ctx, m); stop || err != nil {
+						flushOutcomes(ctx, toolList, status, m)
 						return err
 					}
 				}
 			}
+			flushOutcomes(ctx, toolList, status, m)
 			messages = append(messages, llm.Message{Role: "user", Content: toolResults})
 			continue
 		}
@@ -200,6 +202,7 @@ loop:
 				continue
 			}
 			msgs, stop, err := h.AfterTurn(ctx, m)
+			flushOutcomes(ctx, toolList, status, m)
 			if err != nil {
 				return err
 			}
@@ -255,6 +258,29 @@ loop:
 	}
 }
 
+// flushOutcomes records any concluded tool outcome on the Incident CR. Tools
+// report what happened; writing it is the loop's job, so no tool needs to know
+// the CR exists. A failed write is surfaced but never fatal — losing the status
+// update matters less than losing the session that produced it.
+func flushOutcomes(ctx context.Context, toolList []tools.Tool, status *tools.UpdateIncidentStatus, m messenger.Messenger) {
+	for _, t := range toolList {
+		r, ok := t.(tools.OutcomeReporter)
+		if !ok {
+			continue
+		}
+		phase, message, reported := r.Outcome()
+		if !reported {
+			continue
+		}
+		params, _ := json.Marshal(map[string]string{"phase": phase, "message": message})
+		if _, err := status.Execute(ctx, params); err != nil {
+			m.Send(fmt.Sprintf("Warning: could not set incident status to %s: %v", phase, err)) //nolint:errcheck
+			continue
+		}
+		m.Send(fmt.Sprintf("Incident status: %s.", phase)) //nolint:errcheck
+	}
+}
+
 func (s *Scout) loadIncident(ctx context.Context) (*Incident, error) {
 	obj, err := s.dynCli.Resource(tools.IncidentGVR).
 		Namespace(s.cfg.IncidentNamespace).
@@ -267,24 +293,41 @@ func (s *Scout) loadIncident(ctx context.Context) (*Incident, error) {
 	targetRef, _, _ := unstructuredMap(spec, "targetRef")
 
 	incident := &Incident{
-		IncidentName: s.cfg.IncidentName,
-		Namespace:    s.cfg.IncidentNamespace,
-		Trigger:      stringField(spec, "trigger"),
-		PodName:      stringField(targetRef, "name"),
-		PodNamespace: stringField(targetRef, "namespace"),
+		IncidentName:     s.cfg.IncidentName,
+		Namespace:        s.cfg.IncidentNamespace,
+		Trigger:          stringField(spec, "trigger"),
+		TargetAPIVersion: stringField(targetRef, "apiVersion"),
+		TargetKind:       stringField(targetRef, "kind"),
+		TargetName:       stringField(targetRef, "name"),
+		TargetNamespace:  stringField(targetRef, "namespace"),
 	}
 
-	if incident.PodName == "" {
+	if incident.TargetName == "" {
 		return nil, fmt.Errorf("targetRef.name is empty in Incident CR")
 	}
-	if incident.PodNamespace == "" {
-		incident.PodNamespace = s.cfg.IncidentNamespace
+	// Kind drives which context the scout gathers, so guessing it wrong is
+	// worse than refusing: a mis-typed target would be investigated as the
+	// wrong kind and silently produce nonsense.
+	if incident.TargetKind == "" {
+		return nil, fmt.Errorf("targetRef.kind is empty in Incident CR")
+	}
+	// Empty apiVersion means the core group, per ObjectReference convention.
+	if incident.TargetAPIVersion == "" {
+		incident.TargetAPIVersion = "v1"
+	}
+	if incident.TargetNamespace == "" {
+		incident.TargetNamespace = s.cfg.IncidentNamespace
 	}
 
 	return incident, nil
 }
 
-func (s *Scout) gatherContext(ctx context.Context, incident *Incident, getResource *tools.GetResource, getPodLogs *tools.GetPodLogs) []tools.ToolResult {
+// gatherContext seeds the conversation with the target object and the events
+// about it — the two things that are meaningful for any kind. Everything else
+// (logs, owners, children, node capacity) the scout fetches itself with the
+// tools it has; pre-fetching more would mean teaching this function about
+// specific kinds, which is exactly what makes it brittle.
+func gatherContext(ctx context.Context, incident *Incident, getResource tools.Tool) []tools.ToolResult {
 	call := func(t tools.Tool, params any) tools.ToolResult {
 		raw, _ := json.Marshal(params)
 		out, err := t.Execute(ctx, raw)
@@ -293,16 +336,17 @@ func (s *Scout) gatherContext(ctx context.Context, incident *Incident, getResour
 
 	return []tools.ToolResult{
 		call(getResource, map[string]string{
-			"apiVersion": "v1", "kind": "Pod",
-			"name": incident.PodName, "namespace": incident.PodNamespace,
+			"apiVersion": incident.TargetAPIVersion, "kind": incident.TargetKind,
+			"name": incident.TargetName, "namespace": incident.TargetNamespace,
 		}),
+		// Match on kind as well as name: names are only unique per kind, so a
+		// Deployment and a Pod sharing a name would otherwise pick up each
+		// other's events.
 		call(getResource, map[string]string{
 			"apiVersion": "v1", "kind": "Event",
-			"namespace":     incident.PodNamespace,
-			"fieldSelector": "involvedObject.name=" + incident.PodName,
-		}),
-		call(getPodLogs, map[string]string{
-			"podName": incident.PodName, "namespace": incident.PodNamespace,
+			"namespace": incident.TargetNamespace,
+			"fieldSelector": "involvedObject.name=" + incident.TargetName +
+				",involvedObject.kind=" + incident.TargetKind,
 		}),
 	}
 }

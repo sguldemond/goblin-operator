@@ -6,7 +6,11 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// NewAll returns every available tool. Add new tools here.
+// NewAll returns every available tool, plus the status writer the scout loop
+// uses to record tool outcomes on the Incident CR. Add new tools here.
+//
+// Tools no longer receive the status writer: one that concludes something about
+// the incident implements OutcomeReporter and the loop does the writing.
 func NewAll(
 	client kubernetes.Interface,
 	dynCli dynamic.Interface,
@@ -14,14 +18,14 @@ func NewAll(
 	targetNamespace string,
 	incidentName string,
 	incidentNamespace string,
-) []Tool {
+) ([]Tool, *UpdateIncidentStatus) {
 	status := NewUpdateIncidentStatus(dynCli, incidentName, incidentNamespace)
 	return []Tool{
 		NewGetResource(dynCli, mapper),
 		NewGetPodLogs(client),
-		NewPatchDeployment(client, targetNamespace, status),
+		NewPatchDeployment(client, targetNamespace),
 		status,
-		NewEscalate(status),
+		NewEscalate(),
 		NewExit(),
-	}
+	}, status
 }
