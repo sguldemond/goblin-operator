@@ -16,13 +16,4 @@ spec:
   permissions:
     approval: required # required | auto | none — the human gate itself
     allow:
-      - action: patchMemoryLimit
-        bounds:
-          increaseBy: { max: 50% } # relative to current limit
-      - action: restartPod
-        bounds:
-          maxAttempts: 1
-          cooldown: 10m
-    deny:
-      - action: scaleReplicas # explicit, even though allow is already exhaustive
-      - action: deleteResource
+      - action: patchDeployment
