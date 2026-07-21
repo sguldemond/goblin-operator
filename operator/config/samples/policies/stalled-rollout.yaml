@@ -1,0 +1,28 @@
+# Pairs with scenarios/stalled-rollout.yaml.
+#
+# The first policy that targets a Deployment rather than a Pod. Nothing is wrong
+# with any individual pod here — they start fine and simply never pass their
+# readiness probe — so the failure only exists at the Deployment level, as a
+# Progressing condition the rollout controller flips after
+# progressDeadlineSeconds.
+apiVersion: ops.goblinoperator.io/v1alpha1
+kind: IncidentPolicy
+metadata:
+  name: stalled-rollout
+spec:
+  target:
+    apiVersion: apps/v1
+    kind: Deployment
+  detect:
+    trigger: ProgressDeadlineExceeded
+    expression: >-
+      has(object.status.conditions) &&
+      object.status.conditions.exists(c,
+        c.type == 'Progressing' &&
+        c.status == 'False' &&
+        c.reason == 'ProgressDeadlineExceeded')
+  # The fix is a change to the pod template (correcting or removing the probe),
+  # so the scout needs the same patch permission as the Pod-targeting policies.
+  permissions:
+    allow:
+      - clusterRole: goblin-scout-patch-deployments
