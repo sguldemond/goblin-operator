@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	opsv1alpha1 "github.com/sguldemond/goblin/api/v1alpha1"
@@ -48,6 +49,7 @@ var preStartFailureReasons = map[string]bool{
 type IncidentReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	Grants *GrantManager
 }
 
 // +kubebuilder:rbac:groups=ops.goblinoperator.io,resources=incidents,verbs=get;list;watch;create;update;patch;delete
@@ -63,19 +65,64 @@ func (r *IncidentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Deleting: revoke before letting the object go, so a grant can never
+	// outlive the incident that justified it.
+	if !inc.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, &inc)
+	}
+
 	switch inc.Status.Phase {
 	case "", opsv1alpha1.PhaseDetected:
 		return r.handleDetected(ctx, &inc)
 	case opsv1alpha1.PhaseAssessing:
 		return r.handleAssessing(ctx, &inc)
 	default:
+		// Terminal phases: the scout is finished, so its permissions go away
+		// even though the Incident is kept for the record.
+		if isTerminal(inc.Status.Phase) {
+			if err := r.Grants.Revoke(ctx, &inc); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		log.Info("No action for phase", "phase", inc.Status.Phase)
 		return ctrl.Result{}, nil
 	}
 }
 
+func (r *IncidentReconciler) handleDeletion(ctx context.Context, inc *opsv1alpha1.Incident) (ctrl.Result, error) {
+	if !controllerutil.ContainsFinalizer(inc, incidentFinalizer) {
+		return ctrl.Result{}, nil
+	}
+	if err := r.Grants.Revoke(ctx, inc); err != nil {
+		return ctrl.Result{}, err
+	}
+	controllerutil.RemoveFinalizer(inc, incidentFinalizer)
+	return ctrl.Result{}, r.Update(ctx, inc)
+}
+
 func (r *IncidentReconciler) handleDetected(ctx context.Context, inc *opsv1alpha1.Incident) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+
+	// The finalizer must exist before any grant, or a crash in between leaves a
+	// binding with nothing to trigger its removal.
+	if !controllerutil.ContainsFinalizer(inc, incidentFinalizer) {
+		controllerutil.AddFinalizer(inc, incidentFinalizer)
+		if err := r.Update(ctx, inc); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	// Grant before dispatching: a scout that starts without the permissions its
+	// policy promised fails confusingly, mid-investigation.
+	pol, err := r.policyFor(ctx, inc)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.Grants.Grant(ctx, inc, pol); err != nil {
+		inc.Status.Phase = opsv1alpha1.PhaseEscalated
+		inc.Status.Message = fmt.Sprintf("could not grant scout permissions: %v", err)
+		return ctrl.Result{}, r.statusUpdate(ctx, inc)
+	}
 
 	// Idempotency: check for an existing Job.
 	existing, err := r.findJob(ctx, inc)
@@ -150,6 +197,23 @@ func (r *IncidentReconciler) scoutPodFailureMessage(ctx context.Context, namespa
 		}
 	}
 	return ""
+}
+
+// policyFor loads the policy that raised an incident. A missing policy is not
+// fatal: the incident still deserves a scout, it just gets no extra permissions.
+func (r *IncidentReconciler) policyFor(ctx context.Context, inc *opsv1alpha1.Incident) (*opsv1alpha1.IncidentPolicy, error) {
+	if inc.Spec.PolicyRef == "" {
+		return nil, nil
+	}
+	var pol opsv1alpha1.IncidentPolicy
+	err := r.Get(ctx, client.ObjectKey{Name: inc.Spec.PolicyRef}, &pol)
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &pol, nil
 }
 
 func (r *IncidentReconciler) findJob(ctx context.Context, inc *opsv1alpha1.Incident) (*batchv1.Job, error) {

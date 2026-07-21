@@ -1,0 +1,51 @@
+# Closes the self-binding hole.
+#
+# The operator holds `bind` on the grantable scout roles, which bounds WHICH
+# permissions it can hand out. It does not bound WHO receives them: the RBAC
+# escalation check validates roleRef, never subjects. Without this policy the
+# operator could bind goblin-scout-patch-deployments to its own ServiceAccount
+# and quietly acquire patch on Deployments.
+#
+# This rejects any binding of a grantable role to a subject other than the
+# scout. No webhook server, no certificates — the API server evaluates the CEL.
+#
+# Requires Kubernetes 1.30+ for ValidatingAdmissionPolicy at GA.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: goblin-scout-grants-only-to-scout
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["rolebindings", "clusterrolebindings"]
+  variables:
+    - name: isGoblinRole
+      expression: >-
+        has(object.roleRef) &&
+        object.roleRef.kind == 'ClusterRole' &&
+        object.roleRef.name.startsWith('goblin-scout-')
+  validations:
+    # Every subject must be the scout ServiceAccount. Checking all subjects
+    # rather than just the first stops a binding that lists the scout alongside
+    # something else.
+    - expression: >-
+        !variables.isGoblinRole ||
+        object.subjects.all(s,
+          s.kind == 'ServiceAccount' && s.name == 'goblin-scout')
+      message: >-
+        goblin-scout-* ClusterRoles may only be bound to the goblin-scout
+        ServiceAccount; binding them to any other subject is a privilege
+        escalation path and is rejected.
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: goblin-scout-grants-only-to-scout
+spec:
+  policyName: goblin-scout-grants-only-to-scout
+  validationActions: [Deny, Audit]

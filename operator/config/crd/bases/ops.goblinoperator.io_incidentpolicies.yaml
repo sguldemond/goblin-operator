@@ -64,6 +64,29 @@ spec:
                 - expression
                 - trigger
                 type: object
+              permissions:
+                description: 'Permissions is optional: a policy without it only ever
+                  raises incidents.'
+                properties:
+                  allow:
+                    items:
+                      description: |-
+                        AllowedRole names one pre-vetted ClusterRole the scout may be granted while
+                        an incident from this policy is open.
+                      properties:
+                        clusterRole:
+                          description: |-
+                            ClusterRole must be one of the roles the operator is permitted to bind.
+                            The operator's own RBAC restricts `bind` to a fixed set by resourceNames,
+                            so naming anything else fails at the API server rather than escalating.
+                          minLength: 1
+                          type: string
+                      required:
+                      - clusterRole
+                      type: object
+                    minItems: 1
+                    type: array
+                type: object
               target:
                 description: TargetGVK selects which kind of object a policy watches.
                 properties:

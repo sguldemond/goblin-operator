@@ -179,11 +179,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	grants := &controller.GrantManager{
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorder("goblin-grants"),
+	}
+
 	if err := (&controller.IncidentReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		Grants: grants,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "incident")
+		os.Exit(1)
+	}
+
+	// Backstop for grants the finalizer could not clean up.
+	if err := mgr.Add(&controller.GrantSweeper{Grants: grants}); err != nil {
+		setupLog.Error(err, "Failed to add grant sweeper")
 		os.Exit(1)
 	}
 

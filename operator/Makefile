@@ -174,6 +174,8 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 	"$(KUBECTL)" apply -f config/rbac/scout_serviceaccount.yaml
 	"$(KUBECTL)" apply -f config/rbac/scout_role.yaml
 	"$(KUBECTL)" apply -f config/rbac/scout_role_binding.yaml
+	"$(KUBECTL)" apply -f config/rbac/scout_grant_roles.yaml
+	"$(KUBECTL)" apply -f config/rbac/scout_grant_admission_policy.yaml
 
 .PHONY: secrets
 secrets: ## Create/update all secrets from .env (re-run after adding Telegram creds).

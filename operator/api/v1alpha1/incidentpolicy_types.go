@@ -39,9 +39,28 @@ type DetectSpec struct {
 	Expression string `json:"expression"`
 }
 
+// AllowedRole names one pre-vetted ClusterRole the scout may be granted while
+// an incident from this policy is open.
+type AllowedRole struct {
+	// ClusterRole must be one of the roles the operator is permitted to bind.
+	// The operator's own RBAC restricts `bind` to a fixed set by resourceNames,
+	// so naming anything else fails at the API server rather than escalating.
+	// +kubebuilder:validation:MinLength=1
+	ClusterRole string `json:"clusterRole"`
+}
+
+// PermissionsSpec declares what the scout may do about incidents this policy
+// raises. Omitting it grants nothing beyond the scout's standing read access.
+type PermissionsSpec struct {
+	// +kubebuilder:validation:MinItems=1
+	Allow []AllowedRole `json:"allow,omitempty"`
+}
+
 type IncidentPolicySpec struct {
 	Target TargetGVK  `json:"target"`
 	Detect DetectSpec `json:"detect"`
+	// Permissions is optional: a policy without it only ever raises incidents.
+	Permissions *PermissionsSpec `json:"permissions,omitempty"`
 }
 
 type IncidentPolicyStatus struct {

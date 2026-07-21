@@ -3,24 +3,26 @@ kind: ClusterRole
 metadata:
   name: goblin-scout
 rules:
+  # Incident targets, plus the surrounding cluster state needed to explain them.
   - apiGroups: [""]
-    resources: ["pods"]
+    resources: ["pods", "nodes", "resourcequotas", "namespaces"]
     verbs: ["get", "list"]
-  - apiGroups: [""]
-    resources: ["pods/log"]
-    verbs: ["get"]
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["list"]
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets"]
     verbs: ["get", "list"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["patch"]
+  # Subresource, so it cannot be folded into the pods rule above.
   - apiGroups: [""]
-    resources: ["nodes", "resourcequotas", "namespaces"]
-    verbs: ["get", "list"]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Always fetched as a collection by field selector, never by name.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
+  # No mutation rules here, deliberately. Anything the scout may change is
+  # granted per incident by the operator, scoped to the target's namespace and
+  # revoked when the incident closes — see config/rbac/scout_grant_roles.yaml.
+  # Putting patch back here would give the scout standing cluster-wide write
+  # access and make the grant mechanism decorative.
   - apiGroups: ["ops.goblinoperator.io"]
     resources: ["incidents", "incidents/status"]
     verbs: ["get", "patch"]
