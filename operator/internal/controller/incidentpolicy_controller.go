@@ -68,6 +68,16 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, r.Status().Update(ctx, &pol)
 	}
 
+	// Only envelope kinds have a detector watching them, so a policy targeting
+	// anything else would compile and then never fire. Reject it visibly.
+	if !detection.InEnvelope(gvk) {
+		r.Registry.Delete(pol.Name)
+		l.Info("Policy targets unsupported kind", "policy", pol.Name, "gvk", gvk)
+		setValid(&pol, metav1.ConditionFalse, "UnsupportedKind",
+			fmt.Sprintf("no detector watches %s; see detection.Envelope", gvk))
+		return ctrl.Result{}, r.Status().Update(ctx, &pol)
+	}
+
 	r.Registry.Delete(pol.Name)
 	r.Registry.Set(pol.Name, gvk, detection.CompiledPolicy{
 		Name: pol.Name, Trigger: pol.Spec.Detect.Trigger, Matcher: matcher,

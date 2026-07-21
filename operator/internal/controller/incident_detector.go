@@ -23,7 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -38,16 +38,17 @@ import (
 
 const targetUIDLabel = "goblinoperator.io/target-uid"
 
-var podGVK = schema.GroupVersionKind{Version: "v1", Kind: "Pod"}
-
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// Read access to the kinds this detector watches is generated from
+// detection.Envelope — see internal/detection/zz_generated_rbac.go.
 // +kubebuilder:rbac:groups=ops.goblinoperator.io,resources=incidents,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=ops.goblinoperator.io,resources=incidents/status,verbs=update
 
-// IncidentDetector watches Pods and evaluates every registered Pod-targeting
-// CEL policy against each Pod, creating an Incident on the first match.
+// IncidentDetector watches one kind and evaluates every registered policy
+// targeting that kind against each object, creating an Incident on the first
+// match. One instance exists per watched GVK; DetectorManager creates them.
 type IncidentDetector struct {
 	client.Client
+	GVK               schema.GroupVersionKind
 	Registry          *detection.Registry
 	IncidentNamespace string
 }
@@ -55,52 +56,50 @@ type IncidentDetector struct {
 func (r *IncidentDetector) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
 
-	var pod corev1.Pod
-	if err := r.Get(ctx, req.NamespacedName, &pod); err != nil {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(r.GVK)
+	if err := r.Get(ctx, req.NamespacedName, obj); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	if pod.Annotations[noAutoRemediateAnnotation] == "true" {
+	if obj.GetAnnotations()[noAutoRemediateAnnotation] == "true" {
 		return ctrl.Result{}, nil
 	}
 
-	policies := r.Registry.ForGVK(podGVK)
+	policies := r.Registry.ForGVK(r.GVK)
 	if len(policies) == 0 {
 		return ctrl.Result{}, nil
 	}
 
-	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&pod)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
 	for _, p := range policies {
-		match, err := p.Matcher.Eval(obj)
+		// obj.Object is already the map CEL wants — no conversion needed.
+		match, err := p.Matcher.Eval(obj.Object)
 		if err != nil {
-			l.V(1).Info("policy eval error", "policy", p.Name, "pod", req.NamespacedName, "error", err)
+			l.V(1).Info("policy eval error", "policy", p.Name, "target", req.NamespacedName, "error", err)
 			continue
 		}
 		if !match {
 			continue
 		}
-		if err := r.createIncident(ctx, &pod, p); err != nil {
+		if err := r.createIncident(ctx, obj, p); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, nil // one incident per pod
+		return ctrl.Result{}, nil // one incident per object
 	}
 	return ctrl.Result{}, nil
 }
 
-func (r *IncidentDetector) createIncident(ctx context.Context, pod *corev1.Pod, p detection.CompiledPolicy) error {
+func (r *IncidentDetector) createIncident(ctx context.Context, obj *unstructured.Unstructured, p detection.CompiledPolicy) error {
 	l := log.FromContext(ctx)
 	ns := r.IncidentNamespace
 	if ns == "" {
-		ns = pod.Namespace
+		ns = obj.GetNamespace()
 	}
+	uid := string(obj.GetUID())
 
 	var existing opsv1alpha1.IncidentList
 	if err := r.List(ctx, &existing,
 		client.InNamespace(ns),
-		client.MatchingLabels{targetUIDLabel: string(pod.UID)},
+		client.MatchingLabels{targetUIDLabel: uid},
 	); err != nil {
 		return err
 	}
@@ -110,14 +109,19 @@ func (r *IncidentDetector) createIncident(ctx context.Context, pod *corev1.Pod, 
 
 	inc := &opsv1alpha1.Incident{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      strings.ToLower(p.Trigger) + "-" + string(pod.UID),
+			Name:      strings.ToLower(p.Trigger) + "-" + uid,
 			Namespace: ns,
-			Labels:    map[string]string{targetUIDLabel: string(pod.UID)},
+			Labels:    map[string]string{targetUIDLabel: uid},
 		},
 		Spec: opsv1alpha1.IncidentSpec{
+			// Taken from the live object, so the Incident records what was
+			// actually matched rather than what the detector assumed.
 			TargetRef: corev1.ObjectReference{
-				APIVersion: "v1", Kind: "Pod",
-				Name: pod.Name, Namespace: pod.Namespace, UID: pod.UID,
+				APIVersion: obj.GetAPIVersion(),
+				Kind:       obj.GetKind(),
+				Name:       obj.GetName(),
+				Namespace:  obj.GetNamespace(),
+				UID:        obj.GetUID(),
 			},
 			Trigger:   p.Trigger,
 			PolicyRef: p.Name,
@@ -133,18 +137,35 @@ func (r *IncidentDetector) createIncident(ctx context.Context, pod *corev1.Pod, 
 	if err := r.Status().Update(ctx, inc); err != nil {
 		return err
 	}
-	l.Info("Created Incident", "trigger", p.Trigger, "pod", pod.Name, "incident", inc.Name)
+	l.Info("Created Incident", "trigger", p.Trigger, "kind", obj.GetKind(), "target", obj.GetName(), "incident", inc.Name)
 	return nil
 }
 
+// SetupWithManager registers a watch for this detector's GVK. One detector is
+// registered per kind in detection.Envelope at startup, so an informer runs for
+// every targetable kind whether or not a policy currently targets it. That
+// wastes a cache on unused kinds; the envelope is small enough that the
+// simplicity is worth more than the memory.
 func (r *IncidentDetector) SetupWithManager(mgr ctrl.Manager) error {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(r.GVK)
+
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&corev1.Pod{}, builder.WithPredicates(
+		For(obj, builder.WithPredicates(
 			predicate.And(
 				predicate.ResourceVersionChangedPredicate{},
 				predicate.Funcs{DeleteFunc: func(event.DeleteEvent) bool { return false }},
 			),
 		)).
-		Named("incident-detector").
+		Named(detectorName(r.GVK)).
 		Complete(r)
+}
+
+// detectorName is a unique, metrics-safe controller name per GVK.
+func detectorName(gvk schema.GroupVersionKind) string {
+	group := gvk.Group
+	if group == "" {
+		group = "core"
+	}
+	return "incident-detector-" + strings.ToLower(group+"-"+gvk.Version+"-"+gvk.Kind)
 }

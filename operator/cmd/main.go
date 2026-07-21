@@ -197,13 +197,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.IncidentDetector{
-		Client:            mgr.GetClient(),
-		Registry:          registry,
-		IncidentNamespace: "goblin",
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "incident-detector")
-		os.Exit(1)
+	// One detector per targetable kind. Policies arrive at runtime and name
+	// their own target kind, so every envelope kind is watched up front rather
+	// than waiting for a policy to ask for it.
+	for _, gvk := range detection.GVKs() {
+		if err := (&controller.IncidentDetector{
+			Client:            mgr.GetClient(),
+			GVK:               gvk,
+			Registry:          registry,
+			IncidentNamespace: "goblin",
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "Failed to create controller", "controller", "incident-detector", "gvk", gvk)
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 

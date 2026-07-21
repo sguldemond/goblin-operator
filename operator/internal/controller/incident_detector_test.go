@@ -52,6 +52,7 @@ var _ = Describe("IncidentDetector", func() {
 		})
 		detector = &IncidentDetector{
 			Client:            k8sClient,
+			GVK:               schema.GroupVersionKind{Version: "v1", Kind: "Pod"},
 			Registry:          registry,
 			IncidentNamespace: namespace,
 		}
