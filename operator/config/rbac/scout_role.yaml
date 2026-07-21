@@ -23,6 +23,8 @@ rules:
   # revoked when the incident closes — see config/rbac/scout_grant_roles.yaml.
   # Putting patch back here would give the scout standing cluster-wide write
   # access and make the grant mechanism decorative.
+  # list and watch are how the persistent scout finds work: watch for newly
+  # queued incidents, list for startup recovery and for reading its own history.
   - apiGroups: ["ops.goblinoperator.io"]
     resources: ["incidents", "incidents/status"]
-    verbs: ["get", "patch"]
+    verbs: ["get", "list", "watch", "patch"]

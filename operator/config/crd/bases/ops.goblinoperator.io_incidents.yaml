@@ -112,6 +112,7 @@ spec:
               phase:
                 enum:
                 - Detected
+                - Queued
                 - Assessing
                 - AwaitingApproval
                 - Applied

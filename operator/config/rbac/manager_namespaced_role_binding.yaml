@@ -1,0 +1,22 @@
+# Binds the namespaced half of manager-role.
+#
+# The operator writes Deployments in order to own the scout's lifecycle. That
+# permission is deliberately a Role rather than a ClusterRole entry: cluster-wide
+# write on Deployments would let a bug in the operator modify any workload in
+# the cluster, when all it actually needs is its own namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/managed-by: kustomize
+  name: manager-rolebinding
+  namespace: goblin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: manager-role
+subjects:
+  - kind: ServiceAccount
+    name: controller-manager
+    namespace: system

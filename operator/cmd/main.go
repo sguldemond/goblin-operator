@@ -62,6 +62,7 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var goblinNamespace, scoutImage string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -80,6 +81,10 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&goblinNamespace, "goblin-namespace", "goblin",
+		"Namespace holding Incidents and the scout Deployment.")
+	flag.StringVar(&scoutImage, "scout-image", "sguldemond/goblin-scout:latest",
+		"Image the operator runs the persistent scout from.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -199,6 +204,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The scout is part of the operator's lifecycle: upgrading the operator
+	// upgrades the scout, and nothing has to be applied separately.
+	scout := &controller.ScoutReconciler{
+		Client:    mgr.GetClient(),
+		Namespace: goblinNamespace,
+		Image:     scoutImage,
+	}
+	if err := scout.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "scout-deployment")
+		os.Exit(1)
+	}
+	// A Deployment that has never existed emits no events, so first install
+	// needs an explicit create.
+	if err := mgr.Add(&controller.ScoutBootstrap{Scout: scout}); err != nil {
+		setupLog.Error(err, "Failed to add scout bootstrap")
+		os.Exit(1)
+	}
+
 	registry := detection.NewRegistry()
 
 	if err := (&controller.PolicyReconciler{
@@ -217,7 +240,7 @@ func main() {
 			Client:            mgr.GetClient(),
 			GVK:               gvk,
 			Registry:          registry,
-			IncidentNamespace: "goblin",
+			IncidentNamespace: goblinNamespace,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "Failed to create controller", "controller", "incident-detector", "gvk", gvk)
 			os.Exit(1)

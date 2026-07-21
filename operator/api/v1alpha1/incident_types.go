@@ -22,11 +22,16 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// +kubebuilder:validation:Enum=Detected;Assessing;AwaitingApproval;Applied;Rejected;Escalated;HandedOff
+// +kubebuilder:validation:Enum=Detected;Queued;Assessing;AwaitingApproval;Applied;Rejected;Escalated;HandedOff
 type IncidentPhase string
 
 const (
-	PhaseDetected         IncidentPhase = "Detected"
+	PhaseDetected IncidentPhase = "Detected"
+	// PhaseQueued means the operator has finished its part — permissions are
+	// granted — and the incident is waiting for a scout to claim it. It is the
+	// handoff point: the operator never sets anything past this, and the scout
+	// never looks at anything before it.
+	PhaseQueued           IncidentPhase = "Queued"
 	PhaseAssessing        IncidentPhase = "Assessing"
 	PhaseAwaitingApproval IncidentPhase = "AwaitingApproval"
 	PhaseApplied          IncidentPhase = "Applied"
