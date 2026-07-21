@@ -48,7 +48,30 @@ func (m *TelegramMessenger) poll() {
 		}
 		if u.Message != nil && u.Message.Chat.ID == m.chatID {
 			fmt.Printf("[tg in] %s\n", u.Message.Text)
-			m.textCh <- u.Message.Text
+			m.offer(u.Message.Text)
+		}
+	}
+}
+
+// offer queues an incoming message without ever blocking the poller.
+//
+// poll() is a single goroutine serving both text and button callbacks, so a
+// blocking send on a full channel would stop button presses arriving too — the
+// scout would go silently and permanently deaf, unable to receive an approval
+// even when a real incident needed one. Dropping the oldest chat message is far
+// less costly than that.
+func (m *TelegramMessenger) offer(text string) {
+	for {
+		select {
+		case m.textCh <- text:
+			return
+		default:
+		}
+		select {
+		case dropped := <-m.textCh:
+			fmt.Printf("[tg] dropped unread message: %s\n", dropped)
+		default:
+			// Drained by a reader in between; try the send again.
 		}
 	}
 }

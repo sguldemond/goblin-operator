@@ -14,14 +14,20 @@ import (
 	"github.com/sguldemond/goblin/agent/internal/messenger"
 )
 
+// PatchDeployment stages a Deployment patch for human approval.
+//
+// There is no namespace guard. The scout is long-lived and handles incidents in
+// any namespace, so there is no single namespace to pin to; RBAC is the
+// boundary instead. The operator grants patch permission per incident, scoped
+// to that incident's namespace and revoked when it closes, so an unjustified
+// patch is refused by the API server rather than by this tool.
 type PatchDeployment struct {
 	ApprovalGate
-	client          kubernetes.Interface
-	targetNamespace string
+	client kubernetes.Interface
 }
 
-func NewPatchDeployment(client kubernetes.Interface, targetNamespace string) *PatchDeployment {
-	return &PatchDeployment{client: client, targetNamespace: targetNamespace}
+func NewPatchDeployment(client kubernetes.Interface) *PatchDeployment {
+	return &PatchDeployment{client: client}
 }
 
 func (t *PatchDeployment) Name() string { return "patchDeployment" }
@@ -31,6 +37,8 @@ func (t *PatchDeployment) Description() string {
 		"This tool NEVER applies changes — it only computes what would change. " +
 		"Containers are matched by 'name'; only include the fields you want to change — " +
 		"unspecified fields are preserved automatically. " +
+		"List in resolvesIncidents every incident this fixes — a patch to one Deployment commonly resolves " +
+		"all of its failing pods, and any incident you leave out stays open. " +
 		"After calling this tool you will receive the diff as output: respond with Cause and Fix labels. " +
 		"Call this only when confident in a fix; use escalate if unsure."
 }
@@ -41,16 +49,18 @@ func (t *PatchDeployment) InputSchema() json.RawMessage {
 		"properties": {
 			"deploymentName": {"type": "string", "description": "Name of the Deployment to patch"},
 			"namespace":      {"type": "string", "description": "Namespace of the Deployment"},
-			"patch":          {"type": "object", "description": "Strategic merge patch body. For containers, include only 'name' (to identify) and the fields to change — all other fields are preserved automatically."}
+			"patch":          {"type": "object", "description": "Strategic merge patch body. For containers, include only 'name' (to identify) and the fields to change — all other fields are preserved automatically."},
+			"resolvesIncidents": {"type": "array", "items": {"type": "string"}, "description": "Names of every incident this change fixes. One patch often fixes several — sibling pods of one Deployment. Incidents you do not name here stay open."}
 		},
-		"required": ["deploymentName", "namespace", "patch"]
+		"required": ["deploymentName", "namespace", "patch", "resolvesIncidents"]
 	}`)
 }
 
 type patchDeploymentParams struct {
-	DeploymentName string          `json:"deploymentName"`
-	Namespace      string          `json:"namespace"`
-	Patch          json.RawMessage `json:"patch"`
+	DeploymentName    string          `json:"deploymentName"`
+	Namespace         string          `json:"namespace"`
+	Patch             json.RawMessage `json:"patch"`
+	ResolvesIncidents []string        `json:"resolvesIncidents"`
 }
 
 func (t *PatchDeployment) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -58,10 +68,6 @@ func (t *PatchDeployment) Execute(ctx context.Context, raw json.RawMessage) (str
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return "", fmt.Errorf("invalid params: %w", err)
 	}
-	if p.Namespace != t.targetNamespace {
-		return "", fmt.Errorf("namespace guard: may only patch deployments in %q, got %q", t.targetNamespace, p.Namespace)
-	}
-
 	current, err := t.client.AppsV1().Deployments(p.Namespace).Get(ctx, p.DeploymentName, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("getting deployment: %w", err)
@@ -80,8 +86,10 @@ func (t *PatchDeployment) Execute(ctx context.Context, raw json.RawMessage) (str
 	diff := lcsLineDiff(string(before), string(after), 2)
 
 	if err := t.Stage(&StagedChange{
-		Target: p.Namespace + "/" + p.DeploymentName,
-		Diff:   diff,
+		Target:      p.Namespace + "/" + p.DeploymentName,
+		Diff:        diff,
+		Fingerprint: p.Namespace + "/" + p.DeploymentName + ":" + string(p.Patch),
+		Resolves:    p.ResolvesIncidents,
 		Apply: func(ctx context.Context) error {
 			_, err := t.client.AppsV1().Deployments(p.Namespace).Patch(
 				ctx, p.DeploymentName, types.StrategicMergePatchType, p.Patch, metav1.PatchOptions{},
@@ -232,3 +240,7 @@ func lcsLineDiff(before, after string, ctx int) string {
 
 var _ Tool = (*PatchDeployment)(nil)
 var _ AfterTurnHook = (*PatchDeployment)(nil)
+
+// Gate exposes the embedded approval gate so the scout can wire its
+// revalidation hooks without the tools package knowing what an incident is.
+func (t *PatchDeployment) Gate() *ApprovalGate { return &t.ApprovalGate }

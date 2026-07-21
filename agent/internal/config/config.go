@@ -6,20 +6,15 @@ import (
 )
 
 type Config struct {
-	IncidentName      string
-	IncidentNamespace string
-	APIKey            string
-	Provider          string // "anthropic" (default) | "openai"
-	Model             string
+	// WatchNamespace is where the scout looks for Incidents. Empty means all
+	// namespaces, which is the deployed default.
+	WatchNamespace string
+	APIKey         string
+	Provider       string // "anthropic" (default) | "openai"
+	Model          string
 }
 
 func Load() (*Config, error) {
-	name := os.Getenv("INCIDENT_NAME")
-	ns := os.Getenv("INCIDENT_NAMESPACE")
-	if name == "" || ns == "" {
-		return nil, fmt.Errorf("INCIDENT_NAME and INCIDENT_NAMESPACE must be set")
-	}
-
 	apiKey := os.Getenv("LLM_API_KEY")
 	if apiKey == "" {
 		return nil, fmt.Errorf("LLM_API_KEY must be set")
@@ -46,10 +41,9 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		IncidentName:      name,
-		IncidentNamespace: ns,
-		APIKey:            apiKey,
-		Provider:          provider,
-		Model:             model,
+		WatchNamespace: os.Getenv("WATCH_NAMESPACE"),
+		APIKey:         apiKey,
+		Provider:       provider,
+		Model:          model,
 	}, nil
 }

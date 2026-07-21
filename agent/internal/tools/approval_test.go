@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/sguldemond/goblin/agent/internal/messenger"
@@ -69,11 +70,11 @@ func TestApproveAppliesAndReportsOutcome(t *testing.T) {
 	if !applied {
 		t.Error("Apply was not called after approval")
 	}
-	phase, msg, ok := g.Outcome()
-	if !ok || phase != "Applied" || msg != "rolled out" {
-		t.Errorf("Outcome = (%q, %q, %v); want (Applied, rolled out, true)", phase, msg, ok)
+	o, ok := g.Outcome()
+	if !ok || o.Phase != "Applied" || o.Message != "rolled out" {
+		t.Errorf("Outcome = %+v (ok=%v); want Applied/rolled out", o, ok)
 	}
-	if _, _, ok := g.Outcome(); ok {
+	if _, ok := g.Outcome(); ok {
 		t.Error("Outcome reported twice; want report-once")
 	}
 	if g.Active() {
@@ -96,7 +97,7 @@ func TestUnsettledVerifyReportsNoOutcome(t *testing.T) {
 	if !applied {
 		t.Error("Apply was not called")
 	}
-	if _, _, ok := g.Outcome(); ok {
+	if _, ok := g.Outcome(); ok {
 		t.Error("reported Applied for a change that never settled")
 	}
 }
@@ -119,7 +120,7 @@ func TestRejectDoesNotApply(t *testing.T) {
 	if len(msgs) != 1 || msgs[0] != "Human rejected the change. Reason: wrong namespace" {
 		t.Errorf("msgs = %v; want rejection carrying the reason", msgs)
 	}
-	if _, _, ok := g.Outcome(); ok {
+	if _, ok := g.Outcome(); ok {
 		t.Error("rejection reported an outcome; today rejection leaves the CR untouched")
 	}
 	if g.Active() {
@@ -137,10 +138,108 @@ func TestApplyErrorClearsPending(t *testing.T) {
 	}
 
 	m := &fakeMessenger{answers: []string{"y"}}
-	if _, _, err := g.AfterTurn(context.Background(), m); err == nil {
-		t.Fatal("AfterTurn returned nil error when Apply failed")
+	msgs, stop, err := g.AfterTurn(context.Background(), m)
+
+	// A failed apply must not be fatal. The scout is long-lived and still owes
+	// work to every other incident it holds, so the failure goes back to the
+	// model as a message rather than killing the process.
+	if err != nil {
+		t.Fatalf("failed apply returned a fatal error: %v", err)
+	}
+	if stop {
+		t.Error("failed apply asked the loop to stop")
+	}
+	if len(msgs) != 1 || !strings.Contains(msgs[0], "conflict") {
+		t.Errorf("msgs = %v; want the apply error reported back to the model", msgs)
 	}
 	if g.Active() {
 		t.Error("gate still active after a failed apply; a later turn would re-prompt")
+	}
+	if _, ok := g.Outcome(); ok {
+		t.Error("reported an outcome for a change that never landed")
+	}
+}
+
+// A change approved on stale information must not be applied. The gate asks
+// the caller whether the world still matches, and abandons the change if not.
+func TestApprovalRevalidationBlocksStaleChange(t *testing.T) {
+	var g ApprovalGate
+	var applied bool
+	g.OnApprove = func(context.Context, *StagedChange) (bool, string, error) {
+		return false, "two incidents arrived; re-evaluate", nil
+	}
+	if err := g.Stage(stagedChange(&applied, nil)); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+
+	m := &fakeMessenger{answers: []string{"y"}}
+	msgs, _, err := g.AfterTurn(context.Background(), m)
+	if err != nil {
+		t.Fatalf("AfterTurn: %v", err)
+	}
+	if applied {
+		t.Fatal("applied a change the caller said was stale")
+	}
+	if len(msgs) != 1 || msgs[0] != "two incidents arrived; re-evaluate" {
+		t.Errorf("msgs = %v; want the re-evaluation note passed back to the model", msgs)
+	}
+	if g.Active() {
+		t.Error("gate still holds the abandoned change")
+	}
+}
+
+func TestApprovalProceedsWhenNothingChanged(t *testing.T) {
+	var g ApprovalGate
+	var applied bool
+	g.OnApprove = func(context.Context, *StagedChange) (bool, string, error) {
+		return true, "", nil
+	}
+	if err := g.Stage(stagedChange(&applied, nil)); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+
+	m := &fakeMessenger{answers: []string{"y"}}
+	if _, _, err := g.AfterTurn(context.Background(), m); err != nil {
+		t.Fatalf("AfterTurn: %v", err)
+	}
+	if !applied {
+		t.Error("change was not applied even though revalidation passed")
+	}
+}
+
+// Re-proposing exactly what the human already approved must not ask again,
+// or every unrelated incident costs them a second identical button press.
+func TestPreApprovedSkipsTheSecondPrompt(t *testing.T) {
+	var g ApprovalGate
+	var applied bool
+	g.PreApproved = func(*StagedChange) bool { return true }
+	if err := g.Stage(stagedChange(&applied, nil)); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+
+	m := &fakeMessenger{} // no scripted answers: an Ask here would be a bug
+	if _, _, err := g.AfterTurn(context.Background(), m); err != nil {
+		t.Fatalf("AfterTurn: %v", err)
+	}
+	if !applied {
+		t.Error("pre-approved change was not applied")
+	}
+	if len(m.asked) != 0 {
+		t.Errorf("asked the human again: %v", m.asked)
+	}
+}
+
+// OnStage is what attaches the snapshot a change is later judged against.
+func TestOnStageAttachesSnapshot(t *testing.T) {
+	var g ApprovalGate
+	var applied bool
+	g.OnStage = func(c *StagedChange) { c.Snapshot = []string{"goblin/a"} }
+
+	if err := g.Stage(stagedChange(&applied, nil)); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	snap, ok := g.pending.Snapshot.([]string)
+	if !ok || len(snap) != 1 || snap[0] != "goblin/a" {
+		t.Errorf("snapshot = %v; want it captured at stage time", g.pending.Snapshot)
 	}
 }

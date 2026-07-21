@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -20,8 +18,6 @@ import (
 	"github.com/sguldemond/goblin/agent/internal/messenger"
 	"github.com/sguldemond/goblin/agent/internal/tools"
 )
-
-const maxTokens = 8192
 
 type Scout struct {
 	cfg    *config.Config
@@ -37,43 +33,25 @@ func New(cfg *config.Config, restCfg *rest.Config, client kubernetes.Interface) 
 	return &Scout{cfg: cfg, client: client, dynCli: dynCli}, nil
 }
 
-func (s *Scout) Run(ctx context.Context) error {
-	fmt.Println(">> loading incident...")
-	incident, err := s.loadIncident(ctx)
-	if err != nil {
-		return fmt.Errorf("loading incident from CR: %w", err)
-	}
-	fmt.Printf(">> %s: %s %s/%s\n", incident.Trigger, incident.TargetKind, incident.TargetNamespace, incident.TargetName)
+// resyncInterval bounds how long an incident can go unnoticed if a watch event
+// is missed — during a reconnect, for instance.
+const resyncInterval = 2 * time.Minute
 
+// Run watches for incidents and works them until the context is cancelled.
+//
+// The scout is long-lived and holds one conversation covering every open
+// incident, which is what lets it notice that several incidents share a root
+// cause. It never exits on its own: an empty backlog means idle, not done.
+func (s *Scout) Run(ctx context.Context) error {
 	gr, err := restmapper.GetAPIGroupResources(s.client.Discovery())
 	if err != nil {
 		return fmt.Errorf("building REST mapper: %w", err)
 	}
 	mapper := restmapper.NewDiscoveryRESTMapper(gr)
 
-	toolList, status := tools.NewAll(s.client, s.dynCli, mapper,
-		incident.TargetNamespace,
-		s.cfg.IncidentName, s.cfg.IncidentNamespace,
-	)
-
-	fmt.Println(">> gathering context...")
-	getResource := tools.NewGetResource(s.dynCli, mapper)
-	contextMsg := BuildContext(*incident, gatherContext(ctx, incident, getResource))
-
-	fmt.Println(">> waking the goblin...")
-
-	var m messenger.Messenger
-	if token := os.Getenv("TELEGRAM_BOT_TOKEN"); token != "" {
-		chatID, _ := strconv.ParseInt(os.Getenv("TELEGRAM_CHAT_ID"), 10, 64)
-		tg, err := messenger.NewTelegram(token, chatID)
-		if err != nil {
-			return fmt.Errorf("telegram: %w", err)
-		}
-		m = tg
-		fmt.Println(">> telegram mode")
-		tg.Send(fmt.Sprintf("🔔 %s <code>%s/%s</code> — <b>%s</b>\n\nScout dispatched, investigating now.", incident.TargetKind, incident.TargetNamespace, incident.TargetName, incident.Trigger)) //nolint:errcheck
-	} else {
-		m = messenger.NewTTY(os.Stdin, os.Stdout)
+	m, err := s.messenger()
+	if err != nil {
+		return err
 	}
 
 	var base llm.SendFunc
@@ -87,236 +65,81 @@ func (s *Scout) Run(ctx context.Context) error {
 		fmt.Printf("\r>> API overloaded, retrying in %s (attempt %d)...\n", delay.Round(time.Second), attempt)
 	})
 	fmt.Printf(">> provider: %s, model: %s\n", s.cfg.Provider, s.cfg.Model)
-	if err := s.runLoop(ctx, send, contextMsg, toolList, status, m); err != nil {
-		m.Send(fmt.Sprintf("❌ Scout failed: %v", err)) //nolint:errcheck
-		return err
-	}
-	return nil
-}
 
-// runLoop is the heart of the agent: prompt the LLM, run whatever tools it
-// asks for, feed the results back, and repeat. Strip away the hooks and the
-// messenger and this is what every agent really is — a conversation that keeps
-// going until the model (or the human) decides it's done.
-//
-// Each turn:
-//  1. Send the running conversation to the LLM.
-//  2. If it wants tools, run them and loop back with the results.
-//  3. Otherwise show its reply and ask the human what's next.
-//  4. Repeat until a tool, a hook, or the user ends the session.
-func (s *Scout) runLoop(
-	ctx context.Context,
-	send llm.SendFunc,
-	contextMsg string,
-	toolList []tools.Tool,
-	status *tools.UpdateIncidentStatus,
-	m messenger.Messenger,
-) error {
-	toolMap := make(map[string]tools.Tool, len(toolList))
-	toolDefs := make([]llm.ToolDef, len(toolList))
-	for i, t := range toolList {
-		toolMap[t.Name()] = t
-		toolDefs[i] = llm.ToolDef{
-			Name:        t.Name(),
-			Description: t.Description(),
-			InputSchema: t.InputSchema(),
-		}
-	}
+	watcher := NewIncidentWatcher(s.dynCli, s.cfg.WatchNamespace)
 
-	messages := []llm.Message{
-		{Role: "user", Content: []llm.Content{{Type: "text", Text: contextMsg}}},
-	}
-
-loop:
-	for {
-		stopThinking := m.StartThinking()
-		resp, err := send(ctx, llm.Request{
-			Model:     s.cfg.Model,
-			MaxTokens: maxTokens,
-			System:    systemPrompt,
-			Messages:  messages,
-			Tools:     toolDefs,
-		})
-		stopThinking()
-		if err != nil {
-			return fmt.Errorf("LLM call failed: %w", err)
-		}
-
-		messages = append(messages, llm.Message{Role: "assistant", Content: resp.Content})
-
-		if resp.StopReason == "tool_use" {
-			var toolResults []llm.Content
-			for _, c := range resp.Content {
-				if c.Type != "tool_use" {
-					continue
-				}
-				t, ok := toolMap[c.Name]
-				if !ok {
-					toolResults = append(toolResults, llm.Content{
-						Type:      "tool_result",
-						ToolUseID: c.ID,
-						IsError:   true,
-						Content:   fmt.Sprintf("unknown tool: %s", c.Name),
-					})
-					continue
-				}
-				output, execErr := t.Execute(ctx, c.Input)
-				if execErr != nil {
-					toolResults = append(toolResults, llm.Content{
-						Type:      "tool_result",
-						ToolUseID: c.ID,
-						IsError:   true,
-						Content:   execErr.Error(),
-					})
-				} else {
-					toolResults = append(toolResults, llm.Content{
-						Type:      "tool_result",
-						ToolUseID: c.ID,
-						Content:   output,
-					})
-				}
-				if h, ok := t.(tools.AfterToolHook); ok {
-					if stop, err := h.AfterTool(ctx, m); stop || err != nil {
-						flushOutcomes(ctx, toolList, status, m)
-						return err
-					}
-				}
-			}
-			flushOutcomes(ctx, toolList, status, m)
-			messages = append(messages, llm.Message{Role: "user", Content: toolResults})
-			continue
-		}
-
-		// Print all text blocks from the assistant response.
-		for _, c := range resp.Content {
-			if c.Type == "text" {
-				m.Send(c.Text) //nolint:errcheck
-			}
-		}
-
-		// Let tools with an AfterTurnHook handle the prompt (e.g. approval flow).
-		var turnHandled bool
-		for _, t := range toolList {
-			h, ok := t.(tools.AfterTurnHook)
-			if !ok || !h.Active() {
-				continue
-			}
-			msgs, stop, err := h.AfterTurn(ctx, m)
-			flushOutcomes(ctx, toolList, status, m)
-			if err != nil {
-				return err
-			}
-			if stop {
-				return nil
-			}
-			for _, msg := range msgs {
-				messages = append(messages, llm.Message{
-					Role:    "user",
-					Content: []llm.Content{{Type: "text", Text: msg}},
-				})
-			}
-			turnHandled = true
-			break
-		}
-		if turnHandled {
-			continue
-		}
-
-		// Normal prompt — exit/bye shortcut bypasses the LLM.
-		line, err := m.Ask(ctx, "", nil)
-		if err != nil {
-			return err
-		}
-		if lower := strings.ToLower(line); lower == "exit" || lower == "bye" {
-			for _, t := range toolList {
-				if t.Name() != "exit" {
-					continue
-				}
-				t.Execute(ctx, nil) //nolint:errcheck
-				h := t.(tools.AfterTurnHook)
-				msgs, stop, err := h.AfterTurn(ctx, m)
-				if err != nil {
-					return err
-				}
-				if stop {
-					return nil
-				}
-				for _, msg := range msgs {
-					messages = append(messages, llm.Message{
-						Role:    "user",
-						Content: []llm.Content{{Type: "text", Text: msg}},
-					})
-				}
-				continue loop
-			}
-		}
-
-		messages = append(messages, llm.Message{
-			Role:    "user",
-			Content: []llm.Content{{Type: "text", Text: line}},
-		})
-	}
-}
-
-// flushOutcomes records any concluded tool outcome on the Incident CR. Tools
-// report what happened; writing it is the loop's job, so no tool needs to know
-// the CR exists. A failed write is surfaced but never fatal — losing the status
-// update matters less than losing the session that produced it.
-func flushOutcomes(ctx context.Context, toolList []tools.Tool, status *tools.UpdateIncidentStatus, m messenger.Messenger) {
-	for _, t := range toolList {
-		r, ok := t.(tools.OutcomeReporter)
-		if !ok {
-			continue
-		}
-		phase, message, reported := r.Outcome()
-		if !reported {
-			continue
-		}
-		params, _ := json.Marshal(map[string]string{"phase": phase, "message": message})
-		if _, err := status.Execute(ctx, params); err != nil {
-			m.Send(fmt.Sprintf("Warning: could not set incident status to %s: %v", phase, err)) //nolint:errcheck
-			continue
-		}
-		m.Send(fmt.Sprintf("Incident status: %s.", phase)) //nolint:errcheck
-	}
-}
-
-func (s *Scout) loadIncident(ctx context.Context) (*Incident, error) {
-	obj, err := s.dynCli.Resource(tools.IncidentGVR).
-		Namespace(s.cfg.IncidentNamespace).
-		Get(ctx, s.cfg.IncidentName, metav1.GetOptions{})
+	// Anything left mid-flight belongs to a process that no longer exists. Its
+	// conversation and any staged change died with it, so say so rather than
+	// leaving a stale approval button that will never do anything.
+	backlog, err := watcher.Backlog(ctx)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("reading incident backlog: %w", err)
+	}
+	if len(backlog) > 0 {
+		m.Send(fmt.Sprintf("♻️ Scout restarted with %d open incident(s). Any earlier proposal is void — re-investigating.", len(backlog))) //nolint:errcheck
 	}
 
-	spec, _, _ := unstructuredMap(obj.Object, "spec")
+	sess := &session{
+		scout:   s,
+		mapper:  mapper,
+		send:    send,
+		m:       m,
+		watcher: watcher,
+		open:    map[string]*Incident{},
+	}
+	return sess.run(ctx, backlog)
+}
+
+func (s *Scout) messenger() (messenger.Messenger, error) {
+	if token := os.Getenv("TELEGRAM_BOT_TOKEN"); token != "" {
+		chatID, _ := strconv.ParseInt(os.Getenv("TELEGRAM_CHAT_ID"), 10, 64)
+		tg, err := messenger.NewTelegram(token, chatID)
+		if err != nil {
+			return nil, fmt.Errorf("telegram: %w", err)
+		}
+		fmt.Println(">> telegram mode")
+		return tg, nil
+	}
+	return messenger.NewTTY(os.Stdin, os.Stdout), nil
+}
+
+// incidentFromUnstructured parses an Incident CR. The scout no longer knows
+// which incident it is for at startup, so parsing is driven by whatever the
+// watch delivers rather than by configuration.
+func incidentFromUnstructured(obj map[string]any) (*Incident, error) {
+	meta, _, _ := unstructuredMap(obj, "metadata")
+	spec, _, _ := unstructuredMap(obj, "spec")
 	targetRef, _, _ := unstructuredMap(spec, "targetRef")
 
 	incident := &Incident{
-		IncidentName:     s.cfg.IncidentName,
-		Namespace:        s.cfg.IncidentNamespace,
+		IncidentName:     stringField(meta, "name"),
+		Namespace:        stringField(meta, "namespace"),
 		Trigger:          stringField(spec, "trigger"),
+		PolicyRef:        stringField(spec, "policyRef"),
 		TargetAPIVersion: stringField(targetRef, "apiVersion"),
 		TargetKind:       stringField(targetRef, "kind"),
 		TargetName:       stringField(targetRef, "name"),
 		TargetNamespace:  stringField(targetRef, "namespace"),
 	}
 
+	if incident.IncidentName == "" {
+		return nil, fmt.Errorf("incident has no metadata.name")
+	}
 	if incident.TargetName == "" {
-		return nil, fmt.Errorf("targetRef.name is empty in Incident CR")
+		return nil, fmt.Errorf("targetRef.name is empty in Incident %s", incident.IncidentName)
 	}
 	// Kind drives which context the scout gathers, so guessing it wrong is
 	// worse than refusing: a mis-typed target would be investigated as the
 	// wrong kind and silently produce nonsense.
 	if incident.TargetKind == "" {
-		return nil, fmt.Errorf("targetRef.kind is empty in Incident CR")
+		return nil, fmt.Errorf("targetRef.kind is empty in Incident %s", incident.IncidentName)
 	}
 	// Empty apiVersion means the core group, per ObjectReference convention.
 	if incident.TargetAPIVersion == "" {
 		incident.TargetAPIVersion = "v1"
 	}
 	if incident.TargetNamespace == "" {
-		incident.TargetNamespace = s.cfg.IncidentNamespace
+		incident.TargetNamespace = incident.Namespace
 	}
 
 	return incident, nil

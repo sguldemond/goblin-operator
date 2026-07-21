@@ -30,12 +30,24 @@ type AfterTurnHook interface {
 	AfterTurn(ctx context.Context, m messenger.Messenger) (msgs []string, stop bool, err error)
 }
 
+// Outcome is a conclusion about one or more incidents.
+//
+// Incidents names which ones it applies to, because a single fix routinely
+// resolves several: two replicas of one Deployment OOMKill, one patch fixes
+// both. When it is empty the scout attributes the outcome itself, which it can
+// only do unambiguously when exactly one incident is open.
+type Outcome struct {
+	Incidents []string // incident names
+	Phase     string
+	Message   string
+}
+
 // OutcomeReporter is an optional interface for tools that conclude something
-// about the incident. The scout loop — not the tool — writes the Incident CR,
+// about an incident. The scout loop — not the tool — writes the Incident CR,
 // so tools stay ignorant of the CR entirely. Returns ok=false when there is
 // nothing to report; implementations report once and then clear.
 type OutcomeReporter interface {
-	Outcome() (phase, message string, ok bool)
+	Outcome() (Outcome, bool)
 }
 
 // ToolResult holds the output of a single tool execution for context assembly.

@@ -11,6 +11,7 @@ import (
 type Escalate struct {
 	triggered bool
 	reason    string
+	incidents []string
 	reported  bool
 }
 
@@ -21,21 +22,24 @@ func NewEscalate() *Escalate {
 func (t *Escalate) Name() string { return "escalate" }
 
 func (t *Escalate) Description() string {
-	return "Signal that you cannot determine a safe fix. Ends the investigation and surfaces the reason to the human. Use this instead of guessing."
+	return "Signal that you cannot determine a safe fix. Ends the investigation and surfaces the reason to the human. " +
+		"Name every incident you are giving up on — several may be open. Use this instead of guessing."
 }
 
 func (t *Escalate) InputSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
 		"properties": {
-			"reason": {"type": "string", "description": "Why you cannot determine a safe fix"}
+			"reason":    {"type": "string", "description": "Why you cannot determine a safe fix"},
+			"incidents": {"type": "array", "items": {"type": "string"}, "description": "Names of the incidents you are escalating"}
 		},
 		"required": ["reason"]
 	}`)
 }
 
 type escalateParams struct {
-	Reason string `json:"reason"`
+	Reason    string   `json:"reason"`
+	Incidents []string `json:"incidents"`
 }
 
 func (t *Escalate) Execute(_ context.Context, raw json.RawMessage) (string, error) {
@@ -45,6 +49,7 @@ func (t *Escalate) Execute(_ context.Context, raw json.RawMessage) (string, erro
 	}
 	t.triggered = true
 	t.reason = p.Reason
+	t.incidents = p.Incidents
 	return fmt.Sprintf("Escalated: %s", p.Reason), nil
 }
 
@@ -56,12 +61,12 @@ func (t *Escalate) AfterTool(_ context.Context, m messenger.Messenger) (bool, er
 	return true, nil
 }
 
-func (t *Escalate) Outcome() (string, string, bool) {
+func (t *Escalate) Outcome() (Outcome, bool) {
 	if !t.triggered || t.reported {
-		return "", "", false
+		return Outcome{}, false
 	}
 	t.reported = true
-	return "Escalated", t.reason, true
+	return Outcome{Incidents: t.incidents, Phase: "Escalated", Message: t.reason}, true
 }
 
 var _ Tool = (*Escalate)(nil)
