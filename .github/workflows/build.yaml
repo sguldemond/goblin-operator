@@ -5,7 +5,7 @@ name: Build and Push
 # publishes :20260722 and repoints :latest at it.
 on:
   push:
-    branches: [master, helm-packaging]
+    branches: [master]
     tags: ['v*']
   workflow_dispatch:
 

@@ -1,123 +1,66 @@
+<img src="docs/images/goblin-logo.png" alt="goblin" width="220">
+
 # Goblin Operator
 
-Me goblin. Me live in cluster.
-
-When pod die, me wake up. Me look at logs. Me look at events. Me figure out what went wrong.
-
-Me tell you. You say yes. Me fix.
+A Kubernetes operator with an LLM agent attached. When a pod breaks — OOMKilled,
+Unschedulable, stalled rollout, quota exhausted — the operator wakes a scout
+agent. The scout reads logs and events, works out what went wrong, and asks you
+on Telegram before it changes anything. You approve, it patches the Deployment
+and verifies the fix.
 
 ![goblin-scout](docs/images/goblin-scout.png)
 
----
+## Prerequisites
 
-## What me do
+- A Kubernetes cluster and `kubectl`
+- Helm 3.8+
+- An Anthropic API key — https://console.anthropic.com
+- A Telegram bot: message [@BotFather](https://t.me/botfather), send `/newbot`,
+  keep the token. Then send your new bot any message and read your chat ID:
 
-- Pod OOMKilled? Me see it.
-- Pod stuck Unschedulable? Me see that too.
-- Me read logs, check events, look at everything.
-- Me tell you what happened and what me think we should do.
-- You approve. Me patch Deployment. Pod live again.
+  ```bash
+  curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | jq '.result[0].message.chat.id'
+  ```
 
-Me not touch anything without master say so.
-
----
-
-## How me work
-
-```
-Pod die
-  → Operator summon me
-  → Me investigate
-  → Me talk to you: kubectl attach -it <goblin-scout-pod>
-  → You say yes → me fix
-  → Me check it worked
-  → Me update Remediation, me done
-```
-
----
-
-## How to put me in cluster
-
-**Step 1: install CRDs and give me power**
+## Install
 
 ```bash
-make -C operator deploy
+helm install goblin oci://registry-1.docker.io/sguldemond/goblin \
+  --namespace goblin --create-namespace \
+  --set llm.apiKey=<ANTHROPIC_API_KEY> \
+  --set telegram.botToken=<BOT_TOKEN> \
+  --set telegram.chatID=<CHAT_ID>
 ```
 
-**Step 2: give me secrets**
+If you'd rather manage the credentials yourself, create Secrets and use
+`llm.existingSecret` / `telegram.existingSecret` instead.
 
-Copy `.env.example` to `.env` and fill in your values:
+## Incident policies
+
+An `IncidentPolicy` says what counts as an incident (a CEL expression over the
+target object) and what the scout is allowed to do while that incident is open.
+Nothing is detected until at least one exists. Sample policies for OOMKilled,
+Unschedulable and stalled rollouts:
 
 ```bash
-cp .env.example .env
-# edit .env
+git clone https://github.com/sguldemond/goblin-operator
+kubectl apply -k goblin-operator/operator/config/samples/policies -n goblin
 ```
 
-Then:
+Write your own by copying one of those files.
+
+## Try it
+
+Break something on purpose:
 
 ```bash
-make -C operator secrets
+kubectl apply -f goblin-operator/scenarios/oom-killed.yaml
 ```
 
-Me read `.env` automatically. Add Telegram vars later? Just run `make -C operator secrets` again.
+More in `scenarios/`: `unschedulable-nodeselector.yaml`,
+`unschedulable-resources.yaml`, `stalled-rollout.yaml`, `quota-exceeded.yaml`.
 
----
-
-## How to summon me
-
-Break something, me come running.
-
-```bash
-# OOMKilled
-kubectl apply -f scenarios/oom-killed.yaml
-
-# Pod stuck, no node has right label
-kubectl apply -f scenarios/unschedulable-nodeselector.yaml
-
-# Pod wants too much memory
-kubectl apply -f scenarios/unschedulable-resources.yaml
-
-# Rollout stuck
-kubectl apply -f scenarios/stalled-rollout.yaml
-
-# Namespace quota full
-kubectl apply -f scenarios/quota-exceeded.yaml
-```
-
-Wait for goblin-scout pod to appear, then talk to me:
-
-```bash
-kubectl attach -it -n goblin $(kubectl get pod -n goblin -l "goblinoperator.io/remediation" -o name | head -1)
-```
-
----
-
-## I also have golbin horn, I honk at your Telegram
-
-If you give me bot token, me send messages to your phone.
-
-**Step 1: make bot with Telegram's BotFather (`/newbot`), get token**
-
-**Step 2: get your chat ID**
-
-```bash
-curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | jq '.result[0].message.chat.id'
-```
-
-**Step 3: add Telegram vars to `.env`, rerun secrets**
-
-```bash
-make -C operator secrets
-```
-
-Secret exist → me use Telegram. Secret not exist → find me in `kubectl attach`.
-
----
-
-## Where me live
-
-```
-operator/     me get summoned from here
-agent/        me brain live here
-scenarios/    things you can break to test me
-```
+Within a few seconds the scout messages you on Telegram with what it found and
+what it wants to do. Reply to approve. Without Telegram
+(`--set telegram.enabled=false`) the scout acts on its own — that is a
+deliberate opt-out, not a default.

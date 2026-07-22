@@ -1,3 +1,4 @@
 resources:
   - oom-killed.yaml
+  - stalled-rollout.yaml
   - unschedulable.yaml
