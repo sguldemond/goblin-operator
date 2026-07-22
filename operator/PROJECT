@@ -8,7 +8,7 @@ layout:
 - go.kubebuilder.io/v4
 plugins:
   helm.kubebuilder.io/v1-alpha: {}
-projectName: operator
+projectName: goblin
 repo: github.com/sguldemond/goblin
 resources:
 - api:

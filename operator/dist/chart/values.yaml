@@ -74,7 +74,7 @@ controllerManager:
     seccompProfile:
       type: RuntimeDefault
   terminationGracePeriodSeconds: 10
-  serviceAccountName: operator-controller-manager
+  serviceAccountName: goblin-controller-manager
 
 # [RBAC]: To enable RBAC (Permissions) configurations
 rbac:

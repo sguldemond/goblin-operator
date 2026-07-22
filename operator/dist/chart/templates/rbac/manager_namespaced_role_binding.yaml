@@ -10,12 +10,12 @@ kind: RoleBinding
 metadata:
   labels:
     {{- include "chart.labels" . | nindent 4 }}
-  name: operator-manager-rolebinding
+  name: goblin-manager-rolebinding
   namespace: goblin
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: operator-manager-role
+  name: goblin-manager-role
 subjects:
   - kind: ServiceAccount
     name: {{ .Values.controllerManager.serviceAccountName }}

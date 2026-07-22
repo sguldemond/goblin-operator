@@ -3,7 +3,7 @@ running images tagged {{ include "goblin.operatorTag" . }}.
 
 Watch the operator come up:
 
-  kubectl -n {{ .Release.Namespace }} rollout status deploy/operator-controller-manager
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/goblin-controller-manager
 
 The operator creates the scout Deployment itself. It should appear shortly:
 
