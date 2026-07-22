@@ -1,36 +1,85 @@
 name: Build and Push
 
+# master publishes the :dev tag. A v-prefixed tag publishes an immutable date
+# tag and moves :latest — for example `git tag v20260722 && git push --tags`
+# publishes :20260722 and repoints :latest at it.
 on:
   push:
-    branches: [master]
+    branches: ['**']
+    tags: ['v*']
+  workflow_dispatch:
 
 jobs:
-  scout:
-    name: goblin-scout
+  images:
+    name: ${{ matrix.image }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: goblin-scout
+            context: agent
+          - image: goblin-operator
+            context: operator
     steps:
       - uses: actions/checkout@v4
       - uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: sguldemond/${{ matrix.image }}
+          tags: |
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/master' }}
+            type=match,pattern=v(.*),group=1
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # Any other branch publishes under its own name, so a pipeline can
+            # be exercised end to end without touching dev or latest.
+            type=ref,event=branch,enable=${{ github.ref != 'refs/heads/master' }}
       - uses: docker/build-push-action@v6
         with:
-          context: agent
+          context: ${{ matrix.context }}
           push: true
-          tags: sguldemond/goblin-scout:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
-  operator:
-    name: goblin-operator
+  chart:
+    name: helm chart
+    needs: images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
-        with:
-          context: operator
-          push: true
-          tags: sguldemond/goblin-operator:latest
+      - uses: azure/setup-helm@v4
+
+      # A tag release publishes the committed chart version against the date
+      # tag. Anything else publishes a prerelease version against the branch's
+      # image tag: `helm install` ignores prereleases unless asked with
+      # --devel, so pushing these cannot change what a user gets.
+      - id: version
+        run: |
+          chart=$(helm show chart operator/dist/chart | yq -r .version)
+          if [ "${{ startsWith(github.ref, 'refs/tags/v') }}" = "true" ]; then
+            echo "chart=$chart" >> "$GITHUB_OUTPUT"
+            echo "app=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            slug=$(echo "$GITHUB_REF_NAME" | tr -c 'a-zA-Z0-9' '-' | sed 's/-*$//')
+            echo "chart=$chart-$slug.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "app=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          fi
+
+      - run: |
+          helm lint operator/dist/chart \
+            --set llm.apiKey=lint --set telegram.botToken=lint --set telegram.chatID=1
+
+      - run: |
+          helm package operator/dist/chart \
+            --version "${{ steps.version.outputs.chart }}" \
+            --app-version "${{ steps.version.outputs.app }}"
+
+      - run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | \
+            helm registry login registry-1.docker.io \
+              --username "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+          helm push "goblin-${{ steps.version.outputs.chart }}.tgz" \
+            oci://registry-1.docker.io/sguldemond

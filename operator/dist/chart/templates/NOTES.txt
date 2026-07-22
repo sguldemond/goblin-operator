@@ -1,0 +1,21 @@
+Goblin {{ .Chart.Version }} is installed in namespace {{ .Release.Namespace }},
+running images tagged {{ include "goblin.operatorTag" . }}.
+
+Watch the operator come up:
+
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/operator-controller-manager
+
+The operator creates the scout Deployment itself. It should appear shortly:
+
+  kubectl -n {{ .Release.Namespace }} get deploy goblin-scout
+
+{{ if not .Values.telegram.enabled }}
+WARNING: telegram.enabled is false. The scout has no notifier, so it will act
+on incidents without asking a human first. Set telegram.botToken and
+telegram.chatID to restore the approval step.
+{{- else }}
+The scout will message your Telegram chat when it picks up an incident.
+{{- end }}
+
+Incidents are raised from IncidentPolicy objects. None ship with this chart —
+see config/samples/policies/ in the repository for examples.

@@ -1,0 +1,112 @@
+# [LLM]: Credentials and model for the scout agent.
+# Either apiKey or existingSecret is required.
+llm:
+  # API key for the LLM provider. Stored in a Secret created by this chart.
+  apiKey: ""
+  # Name of a Secret you manage yourself. Must contain the key LLM_API_KEY.
+  # When set, apiKey is ignored and no Secret is created.
+  existingSecret: ""
+  # Empty means the scout's built-in default (anthropic).
+  provider: ""
+  # Empty means the provider's default model.
+  model: ""
+
+# [TELEGRAM]: The scout asks a human before it acts, over Telegram.
+telegram:
+  # Set to false to run the scout with no notifier. It will then act without
+  # asking anyone — deliberate opt-out, not a default.
+  enabled: true
+  botToken: ""
+  chatID: ""
+  # Secret you manage yourself, containing TELEGRAM_BOT_TOKEN and
+  # TELEGRAM_CHAT_ID. When set, botToken and chatID are ignored.
+  existingSecret: ""
+
+# [SCOUT]: The agent Deployment, created and reconciled by the operator.
+scout:
+  image:
+    repository: sguldemond/goblin-scout
+    # Empty means .Chart.AppVersion — the tag this chart version was released
+    # with. Set to "latest" to follow the moving tag instead.
+    tag: ""
+    # Empty means Always for the latest/dev tags, IfNotPresent for pinned ones.
+    pullPolicy: ""
+
+# [MANAGER]: Manager Deployment Configurations
+controllerManager:
+  replicas: 1
+  container:
+    image:
+      repository: sguldemond/goblin-operator
+      # Empty means .Chart.AppVersion.
+      tag: ""
+    imagePullPolicy: IfNotPresent
+    args:
+      - "--leader-elect"
+      - "--metrics-bind-address=:8443"
+      - "--health-probe-bind-address=:8081"
+    resources:
+      limits:
+        cpu: 500m
+        memory: 128Mi
+      requests:
+        cpu: 10m
+        memory: 64Mi
+    livenessProbe:
+      initialDelaySeconds: 15
+      periodSeconds: 20
+      httpGet:
+        path: /healthz
+        port: 8081
+    readinessProbe:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      httpGet:
+        path: /readyz
+        port: 8081
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - "ALL"
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  terminationGracePeriodSeconds: 10
+  serviceAccountName: operator-controller-manager
+
+# [RBAC]: To enable RBAC (Permissions) configurations
+rbac:
+  enable: true
+
+# [CRDs]: To enable the CRDs
+crd:
+  # This option determines whether the CRDs are included
+  # in the installation process.
+  enable: true
+
+  # Enabling this option adds the "helm.sh/resource-policy": keep
+  # annotation to the CRD, ensuring it remains installed even when
+  # the Helm release is uninstalled.
+  # NOTE: Removing the CRDs will also remove all cert-manager CR(s)
+  # (Certificates, Issuers, ...) due to garbage collection.
+  keep: true
+
+# [METRICS]: Set to true to generate manifests for exporting metrics.
+# To disable metrics export set false, and ensure that the
+# ControllerManager argument "--metrics-bind-address=:8443" is removed.
+metrics:
+  enable: true
+
+# [PROMETHEUS]: To enable a ServiceMonitor to export metrics to Prometheus set true
+prometheus:
+  enable: false
+
+# [CERT-MANAGER]: To enable cert-manager injection to webhooks set true
+certmanager:
+  enable: false
+
+# [NETWORK POLICIES]: To enable NetworkPolicies set true
+networkPolicy:
+  enable: false

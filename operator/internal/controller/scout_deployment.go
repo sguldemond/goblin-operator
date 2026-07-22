@@ -52,6 +52,46 @@ type ScoutReconciler struct {
 	client.Client
 	Namespace string
 	Image     string
+
+	// ImagePullPolicy is Always when empty, which suits the moving latest and
+	// dev tags. A chart installing a pinned tag sets IfNotPresent instead.
+	ImagePullPolicy corev1.PullPolicy
+
+	// Secret names are configurable so an operator can point the scout at
+	// secrets managed elsewhere — sealed-secrets, external-secrets — instead of
+	// ones this chart creates. Empty means the built-in default.
+	LLMSecret  string
+	HornSecret string
+
+	// Empty means the scout falls back to its own defaults.
+	LLMProvider string
+	LLMModel    string
+}
+
+const (
+	defaultLLMSecret  = "goblin-scout-secrets"
+	defaultHornSecret = "goblin-horn-secrets"
+)
+
+func (r *ScoutReconciler) llmSecret() string {
+	if r.LLMSecret == "" {
+		return defaultLLMSecret
+	}
+	return r.LLMSecret
+}
+
+func (r *ScoutReconciler) hornSecret() string {
+	if r.HornSecret == "" {
+		return defaultHornSecret
+	}
+	return r.HornSecret
+}
+
+func (r *ScoutReconciler) pullPolicy() corev1.PullPolicy {
+	if r.ImagePullPolicy == "" {
+		return corev1.PullAlways
+	}
+	return r.ImagePullPolicy
 }
 
 func (r *ScoutReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result, error) {
@@ -96,21 +136,42 @@ func (r *ScoutReconciler) Ensure(ctx context.Context) error {
 
 func resourceQty(s string) resource.Quantity { return resource.MustParse(s) }
 
+func secretEnv(name, secret, key string, opt bool) corev1.EnvVar {
+	ref := &corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{Name: secret},
+		Key:                  key,
+	}
+	if opt {
+		optional := true
+		ref.Optional = &optional
+	}
+	return corev1.EnvVar{Name: name, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: ref}}
+}
+
+// env builds the scout's environment. Provider and model are omitted when
+// unset so the scout keeps its own defaults rather than being handed empty
+// strings it would have to special-case.
+func (r *ScoutReconciler) env() []corev1.EnvVar {
+	env := []corev1.EnvVar{
+		// Empty means all namespaces. Incidents are centralised today, but
+		// watching everything costs nothing and survives decentralising later.
+		{Name: "WATCH_NAMESPACE", Value: ""},
+		secretEnv("LLM_API_KEY", r.llmSecret(), "LLM_API_KEY", false),
+		secretEnv("TELEGRAM_BOT_TOKEN", r.hornSecret(), "TELEGRAM_BOT_TOKEN", true),
+		secretEnv("TELEGRAM_CHAT_ID", r.hornSecret(), "TELEGRAM_CHAT_ID", true),
+	}
+	if r.LLMProvider != "" {
+		env = append(env, corev1.EnvVar{Name: "LLM_PROVIDER", Value: r.LLMProvider})
+	}
+	if r.LLMModel != "" {
+		env = append(env, corev1.EnvVar{Name: "LLM_MODEL", Value: r.LLMModel})
+	}
+	return env
+}
+
 func (r *ScoutReconciler) desired() *appsv1.Deployment {
 	replicas := int32(1)
-	optional := true
 	labels := map[string]string{"app": scoutName}
-
-	secretEnv := func(name, secret, key string, opt bool) corev1.EnvVar {
-		ref := &corev1.SecretKeySelector{
-			LocalObjectReference: corev1.LocalObjectReference{Name: secret},
-			Key:                  key,
-		}
-		if opt {
-			ref.Optional = &optional
-		}
-		return corev1.EnvVar{Name: name, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: ref}}
-	}
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -137,16 +198,8 @@ func (r *ScoutReconciler) desired() *appsv1.Deployment {
 					Containers: []corev1.Container{{
 						Name:            "scout",
 						Image:           r.Image,
-						ImagePullPolicy: corev1.PullAlways,
-						Env: []corev1.EnvVar{
-							// Empty means all namespaces. Incidents are
-							// centralised today, but watching everything costs
-							// nothing and survives decentralising later.
-							{Name: "WATCH_NAMESPACE", Value: ""},
-							secretEnv("LLM_API_KEY", "goblin-scout-secrets", "LLM_API_KEY", false),
-							secretEnv("TELEGRAM_BOT_TOKEN", "goblin-horn-secrets", "TELEGRAM_BOT_TOKEN", true),
-							secretEnv("TELEGRAM_CHAT_ID", "goblin-horn-secrets", "TELEGRAM_CHAT_ID", true),
-						},
+						ImagePullPolicy: r.pullPolicy(),
+						Env:             r.env(),
 						Resources: corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{corev1.ResourceMemory: resourceQty("64Mi")},
 							Limits:   corev1.ResourceList{corev1.ResourceMemory: resourceQty("256Mi")},

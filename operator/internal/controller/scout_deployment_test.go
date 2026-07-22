@@ -20,6 +20,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -111,5 +112,63 @@ var _ = Describe("ScoutReconciler", func() {
 		var d appsv1.Deployment
 		Expect(k8sClient.Get(ctx, key, &d)).To(Succeed())
 		Expect(d.Spec.Template.Spec.Containers[0].Image).To(Equal("example/scout:v2"))
+	})
+
+	// desired() is pure, so these need no API server. They cover what the Helm
+	// chart configures through the manager's flags.
+	Describe("configuration", func() {
+		envOf := func(r *ScoutReconciler, name string) *corev1.EnvVar {
+			for _, e := range r.desired().Spec.Template.Spec.Containers[0].Env {
+				if e.Name == name {
+					return &e
+				}
+			}
+			return nil
+		}
+
+		It("defaults the secret names", func() {
+			Expect(envOf(r, "LLM_API_KEY").ValueFrom.SecretKeyRef.Name).
+				To(Equal("goblin-scout-secrets"))
+			Expect(envOf(r, "TELEGRAM_BOT_TOKEN").ValueFrom.SecretKeyRef.Name).
+				To(Equal("goblin-horn-secrets"))
+		})
+
+		It("takes secret names from the operator's flags", func() {
+			r.LLMSecret = "my-llm"
+			r.HornSecret = "my-horn"
+
+			Expect(envOf(r, "LLM_API_KEY").ValueFrom.SecretKeyRef.Name).To(Equal("my-llm"))
+			Expect(envOf(r, "TELEGRAM_BOT_TOKEN").ValueFrom.SecretKeyRef.Name).To(Equal("my-horn"))
+			Expect(envOf(r, "TELEGRAM_CHAT_ID").ValueFrom.SecretKeyRef.Name).To(Equal("my-horn"))
+		})
+
+		// The LLM key is the one credential the scout cannot run without, so
+		// its absence must stop the pod rather than start a mute agent.
+		It("marks only the Telegram credentials optional", func() {
+			Expect(envOf(r, "LLM_API_KEY").ValueFrom.SecretKeyRef.Optional).To(BeNil())
+			Expect(*envOf(r, "TELEGRAM_BOT_TOKEN").ValueFrom.SecretKeyRef.Optional).To(BeTrue())
+			Expect(*envOf(r, "TELEGRAM_CHAT_ID").ValueFrom.SecretKeyRef.Optional).To(BeTrue())
+		})
+
+		It("omits provider and model unless set, so the scout keeps its defaults", func() {
+			Expect(envOf(r, "LLM_PROVIDER")).To(BeNil())
+			Expect(envOf(r, "LLM_MODEL")).To(BeNil())
+
+			r.LLMProvider = "openai"
+			r.LLMModel = "gpt-4o"
+
+			Expect(envOf(r, "LLM_PROVIDER").Value).To(Equal("openai"))
+			Expect(envOf(r, "LLM_MODEL").Value).To(Equal("gpt-4o"))
+		})
+
+		It("pulls always by default and honours an explicit policy", func() {
+			Expect(r.desired().Spec.Template.Spec.Containers[0].ImagePullPolicy).
+				To(Equal(corev1.PullAlways))
+
+			r.ImagePullPolicy = corev1.PullIfNotPresent
+
+			Expect(r.desired().Spec.Template.Spec.Containers[0].ImagePullPolicy).
+				To(Equal(corev1.PullIfNotPresent))
+		})
 	})
 })

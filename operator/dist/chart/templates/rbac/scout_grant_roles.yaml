@@ -1,0 +1,24 @@
+{{- if .Values.rbac.enable }}
+# Grantable scout roles.
+#
+# These are the permissions the operator may hand to the scout for the lifetime
+# of a single incident, by creating a RoleBinding in the target's namespace.
+# They are deliberately NOT bound to anything here — binding is the operator's
+# job, and only while an incident is open.
+#
+# Adding a role to this file is only half the change: the operator's own
+# `bind` rule (see the kubebuilder marker in internal/controller/grants.go)
+# lists permitted roles by name in resourceNames. A role here that is missing
+# there cannot be bound, and an IncidentPolicy naming it will fail with an
+# escalation error rather than silently gaining the permission.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+  name: goblin-scout-patch-deployments
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["patch"]
+{{- end -}}

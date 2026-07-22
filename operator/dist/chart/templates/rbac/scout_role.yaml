@@ -1,0 +1,34 @@
+{{- if .Values.rbac.enable }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+  name: goblin-scout
+rules:
+  # Incident targets, plus the surrounding cluster state needed to explain them.
+  - apiGroups: [""]
+    resources: ["pods", "nodes", "resourcequotas", "namespaces"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list"]
+  # Subresource, so it cannot be folded into the pods rule above.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Always fetched as a collection by field selector, never by name.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
+  # No mutation rules here, deliberately. Anything the scout may change is
+  # granted per incident by the operator, scoped to the target's namespace and
+  # revoked when the incident closes — see config/rbac/scout_grant_roles.yaml.
+  # Putting patch back here would give the scout standing cluster-wide write
+  # access and make the grant mechanism decorative.
+  # list and watch are how the persistent scout finds work: watch for newly
+  # queued incidents, list for startup recovery and for reading its own history.
+  - apiGroups: ["ops.goblinoperator.io"]
+    resources: ["incidents", "incidents/status"]
+    verbs: ["get", "list", "watch", "patch"]
+{{- end -}}

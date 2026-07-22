@@ -25,6 +25,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -62,7 +63,8 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
-	var goblinNamespace, scoutImage string
+	var goblinNamespace, scoutImage, scoutPullPolicy string
+	var llmSecret, hornSecret, llmProvider, llmModel string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -85,6 +87,16 @@ func main() {
 		"Namespace holding Incidents and the scout Deployment.")
 	flag.StringVar(&scoutImage, "scout-image", "sguldemond/goblin-scout:latest",
 		"Image the operator runs the persistent scout from.")
+	flag.StringVar(&scoutPullPolicy, "scout-image-pull-policy", "",
+		"Pull policy for the scout image. Empty means Always, which suits moving tags.")
+	flag.StringVar(&llmSecret, "llm-secret", "",
+		"Secret holding LLM_API_KEY for the scout. Empty means goblin-scout-secrets.")
+	flag.StringVar(&hornSecret, "horn-secret", "",
+		"Secret holding the scout's TELEGRAM_* credentials. Empty means goblin-horn-secrets.")
+	flag.StringVar(&llmProvider, "llm-provider", "",
+		"LLM provider for the scout. Empty means the scout's own default.")
+	flag.StringVar(&llmModel, "llm-model", "",
+		"LLM model for the scout. Empty means the provider's default.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -207,9 +219,14 @@ func main() {
 	// The scout is part of the operator's lifecycle: upgrading the operator
 	// upgrades the scout, and nothing has to be applied separately.
 	scout := &controller.ScoutReconciler{
-		Client:    mgr.GetClient(),
-		Namespace: goblinNamespace,
-		Image:     scoutImage,
+		Client:          mgr.GetClient(),
+		Namespace:       goblinNamespace,
+		Image:           scoutImage,
+		ImagePullPolicy: corev1.PullPolicy(scoutPullPolicy),
+		LLMSecret:       llmSecret,
+		HornSecret:      hornSecret,
+		LLMProvider:     llmProvider,
+		LLMModel:        llmModel,
 	}
 	if err := scout.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "scout-deployment")

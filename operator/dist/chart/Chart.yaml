@@ -1,0 +1,9 @@
+apiVersion: v2
+name: goblin
+description: Goblin — an operator that raises Kubernetes incidents and a scout agent that triages them
+type: application
+# Chart version. Bumped by hand as semver; the release workflow reads it.
+version: 0.1.0
+# Overridden at package time with the release date tag. Stays "dev" in git so a
+# working tree always installs the development images.
+appVersion: "dev"
