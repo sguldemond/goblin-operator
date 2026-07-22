@@ -151,6 +151,18 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
 	"$(KUSTOMIZE)" build config/default > dist/install.yaml
 
+# The Helm plugin copies config/rbac verbatim, so it misses the goblin-
+# namePrefix that config/default applies to the same roles. Without the sed,
+# `make deploy` and `helm install` create differently named ClusterRoles for the
+# same thing. values.yaml, manager.yaml, secrets.yaml and NOTES.txt are
+# hand-maintained; the plugin leaves them alone.
+.PHONY: helm
+helm: manifests generate ## Regenerate the Helm chart in dist/chart from config/.
+	kubebuilder edit --plugins=helm/v1-alpha
+	sed -i 's/name: incident-\(admin\|editor\|viewer\)-role/name: goblin-incident-\1-role/' \
+		dist/chart/templates/rbac/incident_*_role.yaml
+	helm lint dist/chart --set llm.apiKey=lint --set telegram.botToken=lint --set telegram.chatID=1
+
 ##@ Deployment
 
 ifndef ignore-not-found

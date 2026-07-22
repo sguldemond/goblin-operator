@@ -65,7 +65,13 @@ jobs:
           else
             slug=$(echo "$GITHUB_REF_NAME" | tr -c 'a-zA-Z0-9' '-' | sed 's/-*$//')
             echo "chart=$chart-$slug.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-            echo "app=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            # appVersion must name a tag the image job actually pushed: master
+            # publishes dev, every other branch publishes its own name.
+            if [ "$GITHUB_REF_NAME" = "master" ]; then
+              echo "app=dev" >> "$GITHUB_OUTPUT"
+            else
+              echo "app=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - run: |

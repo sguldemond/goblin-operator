@@ -11,7 +11,7 @@ kind: ClusterRole
 metadata:
   labels:
     {{- include "chart.labels" . | nindent 4 }}
-  name: incident-admin-role
+  name: goblin-incident-admin-role
 rules:
 - apiGroups:
   - ops.goblinoperator.io
