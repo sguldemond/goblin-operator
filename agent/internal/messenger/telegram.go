@@ -3,10 +3,18 @@ package messenger
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
+
+// askSeq numbers each question so a button's callback data can be tied to the
+// question it belongs to. A press only counts as an answer to the question that
+// posed it.
+var askSeq atomic.Uint64
 
 // TelegramMessenger implements Messenger over a Telegram bot.
 type TelegramMessenger struct {
@@ -99,12 +107,18 @@ func (m *TelegramMessenger) Ask(ctx context.Context, question string, rows [][]B
 		}
 	}
 
-	// Build inline keyboard.
+	// Tag this question's buttons so a press can be recognised as an answer to
+	// it and not to some earlier question. The gate is safety-critical: a "y"
+	// tapped on a stale keyboard, or one already queued before this question was
+	// asked, must never be read as approval of this change.
+	token := strconv.FormatUint(askSeq.Add(1), 36)
+
 	keyboard := make([][]tgbotapi.InlineKeyboardButton, len(rows))
 	for i, row := range rows {
 		keyboard[i] = make([]tgbotapi.InlineKeyboardButton, len(row))
 		for j, btn := range row {
-			keyboard[i][j] = tgbotapi.NewInlineKeyboardButtonData(btn.Text, btn.Data)
+			data := token + ":" + btn.Data
+			keyboard[i][j] = tgbotapi.NewInlineKeyboardButtonData(btn.Text, data)
 		}
 	}
 	msg := tgbotapi.NewMessage(m.chatID, question)
@@ -113,11 +127,26 @@ func (m *TelegramMessenger) Ask(ctx context.Context, question string, rows [][]B
 		return "", err
 	}
 
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	case data := <-m.callbackCh:
-		return data, nil
+	return awaitCallback(ctx, m.callbackCh, token)
+}
+
+// awaitCallback returns the answer to the question identified by token,
+// discarding any callback that carries a different token. Those are presses on
+// keyboards from earlier questions — queued before this one was asked, or tapped
+// after scrolling back — and answering the current question with one would apply
+// or reject a change the human never looked at.
+func awaitCallback(ctx context.Context, ch <-chan string, token string) (string, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case data := <-ch:
+			t, answer, ok := strings.Cut(data, ":")
+			if !ok || t != token {
+				continue
+			}
+			return answer, nil
+		}
 	}
 }
 
