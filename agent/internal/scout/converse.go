@@ -140,17 +140,14 @@ func (s *session) converse(ctx context.Context, incidents <-chan *Incident, open
 			return nil
 		}
 
-		// Wait for whichever comes first: the human, or a new incident. The
-		// reader belongs to the session, so it survives this conversation
-		// ending rather than leaking a goroutine that eats the next reply.
-		s.listen(ctx)
-
+		// Wait for whichever comes first: the human, or a new incident. Human
+		// input comes from the session's single broker, so this never opens a
+		// second reader that would race the gate or the idle loop.
 		select {
 		case <-ctx.Done():
 			return nil
 
-		case in := <-s.humanCh:
-			s.asking = false
+		case in := <-s.broker.nextText():
 			if in.err != nil {
 				return in.err
 			}

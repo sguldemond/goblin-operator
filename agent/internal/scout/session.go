@@ -33,25 +33,10 @@ type session struct {
 
 	open map[string]*Incident
 
-	// humanCh carries replies from the one long-lived Ask. It belongs to the
-	// session rather than to a conversation: the scout must still hear the
-	// human when idle, and a per-conversation reader would leave an orphaned
-	// goroutine racing the next one for the same reply.
-	humanCh chan humanInput
-	asking  bool
-}
-
-// listen ensures exactly one outstanding Ask. Calling it twice is a no-op,
-// which is what keeps two goroutines from competing for one Telegram message.
-func (s *session) listen(ctx context.Context) {
-	if s.asking {
-		return
-	}
-	s.asking = true
-	go func() {
-		line, err := s.m.Ask(ctx, "", nil)
-		s.humanCh <- humanInput{line, err}
-	}()
+	// broker is the single owner of free-text human input. Every reader of a
+	// human reply — the idle loop, the conversation, the approval gate — goes
+	// through it, so two goroutines can never compete for one message.
+	broker *inputBroker
 }
 
 // run is the outer loop: idle until something arrives, converse until every
@@ -62,7 +47,11 @@ func (s *session) listen(ctx context.Context) {
 // listIncidents. That keeps the context bounded without summarising anything.
 func (s *session) run(ctx context.Context, backlog []*Incident) error {
 	incidents := s.watcher.Watch(ctx)
-	s.humanCh = make(chan humanInput, 1)
+
+	// One goroutine owns messenger input; wrap the messenger so every later
+	// caller (this loop, the conversation, the approval gate) reads through it.
+	s.broker = newInputBroker(ctx, s.m)
+	s.m = brokeredMessenger{m: s.m, b: s.broker}
 
 	pending := backlog
 	var opening []llm.Message
@@ -71,7 +60,6 @@ func (s *session) run(ctx context.Context, backlog []*Incident) error {
 		if len(pending) == 0 {
 			// Idle, but not deaf: the human can still ask questions with no
 			// incident open, and the scout has the tools to answer them.
-			s.listen(ctx)
 			select {
 			case <-ctx.Done():
 				return nil
@@ -86,8 +74,7 @@ func (s *session) run(ctx context.Context, backlog []*Incident) error {
 				if len(pending) > 1 {
 					fmt.Printf(">> collected %d incidents arriving together\n", len(pending))
 				}
-			case in := <-s.humanCh:
-				s.asking = false
+			case in := <-s.broker.nextText():
 				if in.err != nil {
 					return in.err
 				}
